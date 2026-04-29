@@ -1,0 +1,24 @@
+# OS files
+.DS_Store
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Archives and local exports
+*.tar.gz
+
+# Editor settings
+.vscode/
+.idea/
