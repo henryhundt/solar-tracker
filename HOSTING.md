@@ -21,6 +21,7 @@ Estimated cost as of 2026-03-26:
 - The app stays awake, so the built-in scheduler can run normally.
 - The included `Dockerfile` already packages Chromium for Playwright.
 - You only pay for one app container if usage stays small.
+- You do not need a separate GitHub Actions cron job on this path.
 
 ### Steps
 
@@ -48,6 +49,7 @@ Estimated cost as of 2026-03-26:
 
 6. Set the health check path to `/healthz`.
 7. Deploy.
+8. Do not keep the old `Free Daily Sync` GitHub Action enabled for Railway. Railway should run the sync internally with `ENABLE_INTERNAL_SCHEDULER=true`.
 
 ### Notes
 
@@ -64,8 +66,9 @@ This is the closest thing to fully free for personal use, but it has tradeoffs.
 ### What is included in this repo
 
 - `render.yaml` for a free Render web service
-- `.github/workflows/free-daily-sync.yml` for the daily sync trigger
 - `/api/internal/sync-all` protected by `CRON_SECRET`
+
+Note: the GitHub Actions workflow for this legacy free-hosting path has been removed from the repo because the current recommended deployment target is Railway. If you intentionally go back to Render free hosting, recreate a scheduled workflow that POSTs to `/api/internal/sync-all` using `APP_URL` and `CRON_SECRET`.
 
 ### Steps
 
