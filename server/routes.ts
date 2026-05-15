@@ -513,7 +513,7 @@ export async function registerRoutes(
   });
 
   // Manual trigger for syncing all sites
-  app.post("/api/sites/sync-all", async (req, res) => {
+  app.post(api.sites.syncAll.path, async (req, res) => {
     syncAllSites().catch(console.error);
     res.status(202).json({ message: "Syncing all sites", success: true });
   });

@@ -414,7 +414,7 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[425px] rounded-2xl">
+      <DialogContent className="sm:max-w-[425px] rounded-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="font-display text-xl">Edit Site</DialogTitle>
           <DialogDescription>
@@ -489,6 +489,118 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
               </SelectContent>
             </Select>
           </div>
+
+          {currentScraperType === "egauge" && (
+            <div className="space-y-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleInspectEGauge}
+                disabled={isInspectingEGauge}
+                className="w-full rounded-xl"
+                data-testid="button-edit-inspect-egauge"
+              >
+                {isInspectingEGauge ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Inspecting Registers...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4 mr-2" />
+                    Inspect eGauge Registers
+                  </>
+                )}
+              </Button>
+
+              {(eGaugeInspectError || eGaugeRegisters.length > 0) && (
+                <div
+                  className={`p-3 rounded-xl border text-sm space-y-2 ${
+                    eGaugeRegisters.length > 0
+                      ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800"
+                      : "bg-destructive/10 border-destructive/20"
+                  }`}
+                  data-testid="panel-edit-egauge-registers"
+                >
+                  {eGaugeRegisters.length > 0 ? (
+                    <>
+                      <div className="flex items-center gap-2 text-green-700 dark:text-green-400 font-medium">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        Meter inspected successfully
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                        <span>
+                          Selected {selectedEGaugeRegisterIds.size} of {eGaugeRegisters.length} register(s)
+                        </span>
+                        <span className="uppercase tracking-wide">
+                          Mode: {eGaugeSelectionMode}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs text-muted-foreground font-medium">
+                            Registers found ({eGaugeRegisters.length}):
+                          </p>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={useRecommendedEGaugeRegisters}
+                            className="h-7 px-2 text-xs"
+                            disabled={getRecommendedEGaugeRegisterIds(eGaugeRegisters).length === 0}
+                          >
+                            Use Recommended
+                          </Button>
+                        </div>
+                        <div className="max-h-36 overflow-y-auto space-y-1">
+                          {eGaugeRegisters.map((register) => (
+                            <label
+                              key={register.idx}
+                              className="flex items-center gap-3 rounded-lg px-2 py-1 hover:bg-background/60 cursor-pointer"
+                              data-testid={`row-edit-egauge-register-${register.idx}`}
+                            >
+                              <Checkbox
+                                checked={selectedEGaugeRegisterIds.has(register.idx)}
+                                onCheckedChange={() => toggleEGaugeRegisterSelection(register.idx)}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <span className="text-xs font-mono block truncate">{register.name}</span>
+                                <span className="text-[11px] text-muted-foreground">
+                                  IDX {register.idx}
+                                  {typeof register.rate === "number" ? ` • ${Math.round(register.rate)} W now` : ""}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <Badge variant="outline" className="text-xs py-0 px-1.5">
+                                  {register.type}
+                                </Badge>
+                                {register.isRecommendedSolar && (
+                                  <Badge className="text-xs py-0 px-1.5 bg-yellow-500 text-white border-0">
+                                    <Sun className="w-3 h-3 mr-0.5" />
+                                    Recommended
+                                  </Badge>
+                                )}
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                        {getRecommendedEGaugeRegisterIds(eGaugeRegisters).length === 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            No obvious solar registers were detected automatically. Choose the production registers manually.
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-start gap-2 text-destructive">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <span>{eGaugeInspectError || "Register inspection failed."}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {(isAlsoEnergy || isSolarEdge) && (
             <div className="space-y-2">
@@ -713,118 +825,6 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
               Username and password are optional for classic eGauge proxy meters that only expose the legacy XML API.
               They are still required for JSON WebAPI access.
             </p>
-          )}
-
-          {currentScraperType === "egauge" && (
-            <div className="space-y-3">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleInspectEGauge}
-                disabled={isInspectingEGauge}
-                className="w-full rounded-xl"
-                data-testid="button-edit-inspect-egauge"
-              >
-                {isInspectingEGauge ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Inspecting Registers...
-                  </>
-                ) : (
-                  <>
-                    <Zap className="w-4 h-4 mr-2" />
-                    Inspect eGauge Registers
-                  </>
-                )}
-              </Button>
-
-              {(eGaugeInspectError || eGaugeRegisters.length > 0) && (
-                <div
-                  className={`p-3 rounded-xl border text-sm space-y-2 ${
-                    eGaugeRegisters.length > 0
-                      ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800"
-                      : "bg-destructive/10 border-destructive/20"
-                  }`}
-                  data-testid="panel-edit-egauge-registers"
-                >
-                  {eGaugeRegisters.length > 0 ? (
-                    <>
-                      <div className="flex items-center gap-2 text-green-700 dark:text-green-400 font-medium">
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        Meter inspected successfully
-                      </div>
-                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <span>
-                          Selected {selectedEGaugeRegisterIds.size} of {eGaugeRegisters.length} register(s)
-                        </span>
-                        <span className="uppercase tracking-wide">
-                          Mode: {eGaugeSelectionMode}
-                        </span>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs text-muted-foreground font-medium">
-                            Registers found ({eGaugeRegisters.length}):
-                          </p>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={useRecommendedEGaugeRegisters}
-                            className="h-7 px-2 text-xs"
-                            disabled={getRecommendedEGaugeRegisterIds(eGaugeRegisters).length === 0}
-                          >
-                            Use Recommended
-                          </Button>
-                        </div>
-                        <div className="max-h-36 overflow-y-auto space-y-1">
-                          {eGaugeRegisters.map((register, index) => (
-                            <label
-                              key={register.idx}
-                              className="flex items-center gap-3 rounded-lg px-2 py-1 hover:bg-background/60 cursor-pointer"
-                              data-testid={`row-edit-egauge-register-${register.idx}`}
-                            >
-                              <Checkbox
-                                checked={selectedEGaugeRegisterIds.has(register.idx)}
-                                onCheckedChange={() => toggleEGaugeRegisterSelection(register.idx)}
-                              />
-                              <div className="min-w-0 flex-1">
-                                <span className="text-xs font-mono block truncate">{register.name}</span>
-                                <span className="text-[11px] text-muted-foreground">
-                                  IDX {register.idx}
-                                  {typeof register.rate === "number" ? ` • ${Math.round(register.rate)} W now` : ""}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <Badge variant="outline" className="text-xs py-0 px-1.5">
-                                  {register.type}
-                                </Badge>
-                                {register.isRecommendedSolar && (
-                                  <Badge className="text-xs py-0 px-1.5 bg-yellow-500 text-white border-0">
-                                    <Sun className="w-3 h-3 mr-0.5" />
-                                    Recommended
-                                  </Badge>
-                                )}
-                              </div>
-                            </label>
-                          ))}
-                        </div>
-                        {getRecommendedEGaugeRegisterIds(eGaugeRegisters).length === 0 && (
-                          <p className="text-xs text-muted-foreground">
-                            No obvious solar registers were detected automatically. Choose the production registers manually.
-                          </p>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex items-start gap-2 text-destructive">
-                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                      <span>{eGaugeInspectError || "Register inspection failed."}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
           )}
 
           {validationError && (

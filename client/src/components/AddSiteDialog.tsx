@@ -720,109 +720,6 @@ export function AddSiteDialog() {
               </Select>
             </div>
 
-            {showSiteIdentifierField && (
-              <div className="space-y-2">
-                <Label htmlFor="siteIdentifier">{siteIdentifierLabel}</Label>
-                <Input 
-                  id="siteIdentifier" 
-                  placeholder={scraperType === "solaredge_api" ? "e.g. 1234567" : scraperType === "alsoenergy" ? "e.g. S41121" : "e.g. Main Building"} 
-                  {...register("siteIdentifier")} 
-                  className="rounded-xl"
-                  data-testid="input-site-identifier"
-                />
-                <p className="text-xs text-muted-foreground">
-                  {scraperType === "solaredge_api" 
-                    ? "The numeric Site ID from your SolarEdge portal URL (e.g. monitoring.solaredge.com/site/1234567)"
-                    : scraperType === "alsoenergy"
-                    ? "Use the discovered PowerTrack key. Numeric API site IDs are stored separately when available."
-                    : "For multi-site portals, enter the exact site name as it appears on the dashboard."}
-                </p>
-              </div>
-            )}
-
-            {needsApiKey && (
-              <div className="space-y-2">
-                <Label htmlFor="apiKey">API Key</Label>
-                <Input 
-                  id="apiKey" 
-                  type="password"
-                  placeholder="Your API key" 
-                  {...register("apiKey")} 
-                  className="rounded-xl font-mono"
-                  data-testid="input-api-key"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Generate from: SolarEdge Portal → Admin → Site Access → API Access
-                </p>
-              </div>
-            )}
-
-            {needsCredentials && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Credential Source</Label>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant={credentialMode === "direct" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setCredentialMode("direct")}
-                      className="flex-1 rounded-xl"
-                      data-testid="button-credential-direct"
-                    >
-                      <User className="w-4 h-4 mr-2" />
-                      Enter Credentials
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={credentialMode === "secret" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setCredentialMode("secret")}
-                      className="flex-1 rounded-xl"
-                      data-testid="button-credential-secret"
-                    >
-                      <Key className="w-4 h-4 mr-2" />
-                      Use Stored Secret
-                    </Button>
-                  </div>
-                </div>
-
-                {credentialMode === "direct" ? (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="username">Username</Label>
-                      <Input id="username" {...register("username")} className="rounded-xl" data-testid="input-username" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="password">Password</Label>
-                      <Input id="password" type="password" {...register("password")} className="rounded-xl" data-testid="input-password" />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <Label htmlFor="credentialKey">Secret Key Prefix</Label>
-                    <Input 
-                      id="credentialKey" 
-                      placeholder="e.g. SOLAR_PORTAL_1" 
-                      {...register("credentialKey")} 
-                      className="rounded-xl font-mono"
-                      data-testid="input-credential-key"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Uses secrets: {watch("credentialKey") || "KEY"}_USERNAME, {watch("credentialKey") || "KEY"}_PASSWORD, {watch("credentialKey") || "KEY"}_URL
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {scraperType === "egauge" && (
-              <p className="text-xs text-muted-foreground">
-                Username and password are optional for classic eGauge proxy meters that only expose the legacy XML API.
-                They are still required for JSON WebAPI access.
-              </p>
-            )}
-
             {scraperType === "egauge" && (
               <div className="space-y-3">
                 <Button
@@ -940,6 +837,109 @@ export function AddSiteDialog() {
                   </div>
                 )}
               </div>
+            )}
+
+            {showSiteIdentifierField && (
+              <div className="space-y-2">
+                <Label htmlFor="siteIdentifier">{siteIdentifierLabel}</Label>
+                <Input
+                  id="siteIdentifier"
+                  placeholder={scraperType === "solaredge_api" ? "e.g. 1234567" : scraperType === "alsoenergy" ? "e.g. S41121" : "e.g. Main Building"}
+                  {...register("siteIdentifier")}
+                  className="rounded-xl"
+                  data-testid="input-site-identifier"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {scraperType === "solaredge_api"
+                    ? "The numeric Site ID from your SolarEdge portal URL (e.g. monitoring.solaredge.com/site/1234567)"
+                    : scraperType === "alsoenergy"
+                    ? "Use the discovered PowerTrack key. Numeric API site IDs are stored separately when available."
+                    : "For multi-site portals, enter the exact site name as it appears on the dashboard."}
+                </p>
+              </div>
+            )}
+
+            {needsApiKey && (
+              <div className="space-y-2">
+                <Label htmlFor="apiKey">API Key</Label>
+                <Input
+                  id="apiKey"
+                  type="password"
+                  placeholder="Your API key"
+                  {...register("apiKey")}
+                  className="rounded-xl font-mono"
+                  data-testid="input-api-key"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Generate from: SolarEdge Portal → Admin → Site Access → API Access
+                </p>
+              </div>
+            )}
+
+            {needsCredentials && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Credential Source</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={credentialMode === "direct" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setCredentialMode("direct")}
+                      className="flex-1 rounded-xl"
+                      data-testid="button-credential-direct"
+                    >
+                      <User className="w-4 h-4 mr-2" />
+                      Enter Credentials
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={credentialMode === "secret" ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setCredentialMode("secret")}
+                      className="flex-1 rounded-xl"
+                      data-testid="button-credential-secret"
+                    >
+                      <Key className="w-4 h-4 mr-2" />
+                      Use Stored Secret
+                    </Button>
+                  </div>
+                </div>
+
+                {credentialMode === "direct" ? (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="username">Username</Label>
+                      <Input id="username" {...register("username")} className="rounded-xl" data-testid="input-username" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="password">Password</Label>
+                      <Input id="password" type="password" {...register("password")} className="rounded-xl" data-testid="input-password" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <Label htmlFor="credentialKey">Secret Key Prefix</Label>
+                    <Input
+                      id="credentialKey"
+                      placeholder="e.g. SOLAR_PORTAL_1"
+                      {...register("credentialKey")}
+                      className="rounded-xl font-mono"
+                      data-testid="input-credential-key"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Uses secrets: {watch("credentialKey") || "KEY"}_USERNAME, {watch("credentialKey") || "KEY"}_PASSWORD, {watch("credentialKey") || "KEY"}_URL
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {scraperType === "egauge" && (
+              <p className="text-xs text-muted-foreground">
+                Username and password are optional for classic eGauge proxy meters that only expose the legacy XML API.
+                They are still required for JSON WebAPI access.
+              </p>
             )}
 
             {validationError && (

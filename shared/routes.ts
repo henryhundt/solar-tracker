@@ -147,6 +147,16 @@ export const api = {
         500: errorSchemas.internal,
       },
     },
+    syncAll: {
+      method: 'POST' as const,
+      path: '/api/sites/sync-all',
+      responses: {
+        202: z.object({
+          message: z.string(),
+          success: z.boolean(),
+        }),
+      },
+    },
   },
   readings: {
     summary: {

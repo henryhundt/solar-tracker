@@ -1,13 +1,13 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { format, formatDistanceToNow, isToday, startOfDay, subDays } from "date-fns";
-import { Download, ExternalLink, LineChart, Sun, Zap } from "lucide-react";
+import { Download, ExternalLink, LineChart, RefreshCw, Sun, Zap } from "lucide-react";
 import { Layout } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDashboardSummary } from "@/hooks/use-dashboard-summary";
-import { useSites } from "@/hooks/use-sites";
+import { useSites, useSyncAllSites } from "@/hooks/use-sites";
 import { getSyncHealth, siteNeedsReview } from "@/lib/site-health";
 import { cn } from "@/lib/utils";
 
@@ -69,7 +69,12 @@ function formatScraperLabel(scraperType: string) {
 export default function Dashboard() {
   const { data: sites, isLoading: isLoadingSites } = useSites();
   const historyFrom = startOfDay(subDays(new Date(), HISTORY_WINDOW_DAYS - 1)).toISOString();
-  const { data: dashboardSummary, isLoading: isLoadingSummary } = useDashboardSummary({ from: historyFrom });
+  const {
+    data: dashboardSummary,
+    isLoading: isLoadingSummary,
+    refetch: refetchDashboardSummary,
+  } = useDashboardSummary({ from: historyFrom });
+  const syncAllSitesMutation = useSyncAllSites();
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
 
   const buildExportUrl = () => {
@@ -146,6 +151,7 @@ export default function Dashboard() {
   const averageDailyWh = chartData.length > 0 ? currentTotalWh / chartData.length : 0;
   const activeSitesCount = sites?.length ?? 0;
   const syncedTodayCount = sites?.filter((site) => site.lastSyncedAt && isToday(new Date(site.lastSyncedAt))).length ?? 0;
+  const isAnySiteSyncing = sites?.some((site) => site.status === "scraping") ?? false;
   const sitesNeedingAttention = sites?.filter((site) => site.status === "error").length ?? 0;
   const staleSitesCount = sites?.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "stale").length ?? 0;
   const unsyncedSitesCount = sites?.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "never").length ?? 0;
@@ -165,6 +171,18 @@ export default function Dashboard() {
   const latestSiteSyncLabel = latestSiteSync
     ? formatDistanceToNow(latestSiteSync, { addSuffix: true })
     : "No successful sync yet";
+
+  useEffect(() => {
+    if (!isAnySiteSyncing) {
+      return;
+    }
+
+    const refreshInterval = window.setInterval(() => {
+      void refetchDashboardSummary();
+    }, 5000);
+
+    return () => window.clearInterval(refreshInterval);
+  }, [isAnySiteSyncing, refetchDashboardSummary]);
 
   if (isLoadingSites || isLoadingSummary) {
     return (
@@ -243,6 +261,21 @@ export default function Dashboard() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={() => syncAllSitesMutation.mutate()}
+                disabled={syncAllSitesMutation.isPending || isAnySiteSyncing}
+                className="rounded-full px-4"
+                data-testid="button-sync-all-sites"
+              >
+                <RefreshCw
+                  className={cn(
+                    "h-4 w-4",
+                    (syncAllSitesMutation.isPending || isAnySiteSyncing) && "animate-spin"
+                  )}
+                />
+                {syncAllSitesMutation.isPending || isAnySiteSyncing ? "Syncing..." : "Sync All"}
+              </Button>
               <Button asChild variant="outline" className="rounded-full px-4">
                 <a href={buildExportUrl()}>
                   <Download className="h-4 w-4" />

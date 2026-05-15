@@ -187,3 +187,28 @@ export function useScrapeSite() {
     }
   });
 }
+
+export function useSyncAllSites() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", api.sites.syncAll.path);
+      return api.sites.syncAll.responses[202].parse(await res.json());
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
+      queryClient.invalidateQueries({ queryKey: [api.readings.summary.path] });
+      queryClient.invalidateQueries({ queryKey: [api.readings.list.path] });
+      toast({ title: "Sync Started", description: "All active sites are syncing in the background." });
+    },
+    onError: (error) => {
+      toast({
+        title: "Sync Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+}
