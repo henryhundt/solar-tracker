@@ -42,6 +42,7 @@ Estimated cost as of 2026-03-26:
    ADMIN_USERNAME=your-admin-login
    ADMIN_PASSWORD=choose-a-strong-password
    SESSION_SECRET=generate-a-long-random-secret
+   SESSION_MAX_AGE_HOURS=168
    SEED_ON_BOOT=false
    ENABLE_INTERNAL_SCHEDULER=true
    SYNC_TIMEZONE=America/Chicago
@@ -55,6 +56,7 @@ Estimated cost as of 2026-03-26:
 
 - If you store scraper credentials in environment variables, add them in Railway using the `{KEY}_USERNAME`, `{KEY}_PASSWORD`, `{KEY}_URL`, and `{KEY}_API_KEY` pattern.
 - The hosted app now requires an admin sign-in. `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SESSION_SECRET` must be present in production or the server will refuse to start.
+- Sessions now use PostgreSQL-backed storage when `DATABASE_URL` is present, so logins survive normal app restarts and deploys. `SESSION_MAX_AGE_HOURS` controls the rolling session window and defaults to 168 hours.
 - Railway Docker docs: https://docs.railway.com/reference/dockerfiles
 - Railway billing docs: https://docs.railway.com/pricing/understanding-your-bill
 - Neon pricing: https://neon.com/pricing

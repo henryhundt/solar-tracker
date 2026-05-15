@@ -1,7 +1,9 @@
 import type { Express, Request, RequestHandler } from "express";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import createMemoryStore from "memorystore";
 import { timingSafeEqual } from "node:crypto";
+import { Pool } from "pg";
 import type { AuthSessionResponse } from "@shared/schema";
 
 declare module "express-session" {
@@ -17,6 +19,7 @@ interface AuthConfig {
   adminUsername: string;
   adminPassword: string;
   sessionSecret: string;
+  sessionMaxAgeMs: number;
 }
 
 function getAuthConfig(): AuthConfig {
@@ -25,6 +28,7 @@ function getAuthConfig(): AuthConfig {
   const sessionSecret = process.env.SESSION_SECRET?.trim() ?? "";
   const inProduction = process.env.NODE_ENV === "production";
   const authEnabled = adminUsername.length > 0 && adminPassword.length > 0;
+  const sessionMaxAgeMs = parseSessionMaxAgeMs(process.env.SESSION_MAX_AGE_HOURS);
 
   if (inProduction && !authEnabled) {
     throw new Error("ADMIN_USERNAME and ADMIN_PASSWORD must be set in production.");
@@ -40,6 +44,7 @@ function getAuthConfig(): AuthConfig {
     adminUsername,
     adminPassword,
     sessionSecret: sessionSecret || "dev-only-session-secret",
+    sessionMaxAgeMs,
   };
 }
 
@@ -51,21 +56,21 @@ export function configureAuth(app: Express) {
   }
 
   const MemoryStore = createMemoryStore(session);
+  const store = createSessionStore(config, MemoryStore);
   app.use(
     session({
       name: "solar_tracker_session",
       secret: config.sessionSecret,
       resave: false,
       saveUninitialized: false,
+      rolling: true,
       unset: "destroy",
-      store: new MemoryStore({
-        checkPeriod: 24 * 60 * 60 * 1000,
-      }),
+      store,
       cookie: {
         httpOnly: true,
         sameSite: "lax",
         secure: config.inProduction,
-        maxAge: 12 * 60 * 60 * 1000,
+        maxAge: config.sessionMaxAgeMs,
       },
     }),
   );
@@ -151,4 +156,51 @@ function safeCompare(input: string, expected: string): boolean {
   }
 
   return timingSafeEqual(inputBuffer, expectedBuffer);
+}
+
+function createSessionStore(
+  config: AuthConfig,
+  MemoryStore: ReturnType<typeof createMemoryStore>,
+) {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+
+  if (databaseUrl) {
+    const PGStore = connectPgSimple(session);
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      ssl: databaseUrl.includes("sslmode=require")
+        ? { rejectUnauthorized: false }
+        : undefined,
+    });
+
+    pool.on("error", (error) => {
+      console.error("Session store pool error:", error);
+    });
+
+    return new PGStore({
+      pool,
+      createTableIfMissing: true,
+      ttl: Math.ceil(config.sessionMaxAgeMs / 1000),
+      pruneSessionInterval: 60 * 15,
+    });
+  }
+
+  return new MemoryStore({
+    checkPeriod: 24 * 60 * 60 * 1000,
+  });
+}
+
+function parseSessionMaxAgeMs(rawHours: string | undefined) {
+  const defaultHours = 24 * 7;
+
+  if (!rawHours) {
+    return defaultHours * 60 * 60 * 1000;
+  }
+
+  const parsedHours = Number(rawHours);
+  if (!Number.isFinite(parsedHours) || parsedHours <= 0) {
+    return defaultHours * 60 * 60 * 1000;
+  }
+
+  return parsedHours * 60 * 60 * 1000;
 }
