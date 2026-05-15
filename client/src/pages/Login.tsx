@@ -10,6 +10,10 @@ export default function Login() {
   const loginMutation = useLogin();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const loginErrorMessage =
+    loginMutation.error?.message === "Internal Server Error"
+      ? "Unable to sign in right now. Please try again in a moment."
+      : loginMutation.error?.message;
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -22,8 +26,8 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-background px-4 py-10">
       <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-5xl items-center justify-center">
-        <div className="grid w-full gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-          <section className="rounded-[2rem] border border-border/60 bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.28),_transparent_42%),linear-gradient(160deg,rgba(255,255,255,0.96),rgba(255,247,237,0.92))] p-8 shadow-[0_30px_80px_rgba(15,23,42,0.08)]">
+        <div className="grid w-full gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)]">
+          <section className="min-w-0 overflow-hidden rounded-[2rem] border border-border/60 bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.28),_transparent_42%),linear-gradient(160deg,rgba(255,255,255,0.96),rgba(255,247,237,0.92))] p-8 shadow-[0_30px_80px_rgba(15,23,42,0.08)]">
             <div className="mb-10 inline-flex items-center gap-3 rounded-full border border-amber-200/70 bg-white/80 px-4 py-2 text-sm font-medium text-amber-700">
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-solar text-white shadow-lg shadow-amber-500/30">
                 <Activity className="h-4 w-4" />
@@ -53,7 +57,7 @@ export default function Login() {
             </div>
           </section>
 
-          <Card className="rounded-[2rem] border-border/60 bg-card/95 shadow-[0_25px_60px_rgba(15,23,42,0.12)]">
+          <Card className="min-w-0 rounded-[2rem] border-border/60 bg-card/95 shadow-[0_25px_60px_rgba(15,23,42,0.12)]">
             <CardHeader className="space-y-3 pb-4">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                 <Lock className="h-5 w-5" />
@@ -61,7 +65,7 @@ export default function Login() {
               <div className="space-y-1">
                 <CardTitle className="text-2xl font-display">Admin Login</CardTitle>
                 <CardDescription>
-                  Sign in with the `ADMIN_USERNAME` and `ADMIN_PASSWORD` configured on the server.
+                  Sign in with your admin credentials to manage sites and sync jobs.
                 </CardDescription>
               </div>
             </CardHeader>
@@ -92,9 +96,9 @@ export default function Login() {
                   />
                 </div>
 
-                {loginMutation.error && (
+                {loginErrorMessage && (
                   <div className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="text-login-error">
-                    {loginMutation.error.message}
+                    {loginErrorMessage}
                   </div>
                 )}
 
