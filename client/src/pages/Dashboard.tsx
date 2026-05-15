@@ -1,26 +1,84 @@
-import { useState } from "react";
-import { useReadings } from "@/hooks/use-readings";
-import { useSites } from "@/hooks/use-sites";
+import { lazy, Suspense, useState } from "react";
+import { format, formatDistanceToNow, isToday, startOfDay, subDays } from "date-fns";
+import { Download, ExternalLink, LineChart, Sun, Zap } from "lucide-react";
+import type { DashboardLatestReading } from "@shared/schema";
 import { Layout } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { Zap, Sun, Activity, ArrowUpRight, X, ExternalLink, Download } from "lucide-react";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { format, subDays, startOfDay } from "date-fns";
-import { motion } from "framer-motion";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useDashboardSummary } from "@/hooks/use-dashboard-summary";
+import { useSites } from "@/hooks/use-sites";
+import { getSyncHealth, siteNeedsReview } from "@/lib/site-health";
 import { cn } from "@/lib/utils";
-import type { Reading } from "@shared/schema";
+
+const ProductionTrendChart = lazy(() =>
+  import("@/components/dashboard/ProductionTrendChart").then((module) => ({
+    default: module.ProductionTrendChart,
+  }))
+);
+
+const HISTORY_WINDOW_DAYS = 60;
+const CURRENT_WINDOW_DAYS = 30;
 
 interface ChartDataPoint {
-  date: string;
-  energy: number;
+  date: Date;
+  label: string;
+  fullLabel: string;
+  energyWh: number;
+  energyKwh: number;
+}
+
+function formatEnergy(energyWh: number, fractionDigits = 1) {
+  return `${(energyWh / 1000).toFixed(fractionDigits)} kWh`;
+}
+
+function formatPower(powerW?: number | null) {
+  if (!powerW || powerW <= 0) {
+    return "No live power";
+  }
+
+  if (powerW >= 1000) {
+    return `${(powerW / 1000).toFixed(1)} kW`;
+  }
+
+  return `${Math.round(powerW)} W`;
+}
+
+function parseSummaryDate(value: string) {
+  return new Date(`${value}T00:00:00`);
+}
+
+function isUsableUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return Boolean(parsed.protocol && parsed.host);
+  } catch {
+    return false;
+  }
+}
+
+function formatScraperLabel(scraperType: string) {
+  const labels: Record<string, string> = {
+    alsoenergy: "AlsoEnergy",
+    egauge: "eGauge",
+    mock: "Mock",
+    solaredge_api: "SolarEdge API",
+    solaredge_browser: "SolarEdge Browser",
+  };
+
+  return labels[scraperType] ?? scraperType
+    .replace(/_/g, " ")
+    .replace(/\bapi\b/gi, "API")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export default function Dashboard() {
   const { data: sites, isLoading: isLoadingSites } = useSites();
-  const dashboardFrom = startOfDay(subDays(new Date(), 30)).toISOString();
-  const { data: readings, isLoading: isLoadingReadings } = useReadings({ from: dashboardFrom });
+  const historyFrom = startOfDay(subDays(new Date(), HISTORY_WINDOW_DAYS - 1)).toISOString();
+  const { data: dashboardSummary, isLoading: isLoadingSummary } = useDashboardSummary({ from: historyFrom });
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
+
   const buildExportUrl = () => {
     const url = new URL("/api/readings/export", window.location.origin);
     if (selectedSiteId) {
@@ -29,55 +87,90 @@ export default function Dashboard() {
     return url.toString();
   };
 
-  // Get selected site name for display
-  const selectedSite = sites?.find(s => s.id === selectedSiteId);
+  const selectedSite = sites?.find((site) => site.id === selectedSiteId) ?? null;
+  const dailyEnergy = dashboardSummary?.dailyEnergy ?? [];
+  const filteredDailyEnergy = selectedSiteId
+    ? dailyEnergy.filter((point) => point.siteId === selectedSiteId)
+    : dailyEnergy;
 
-  // Filter readings based on selected site
-  const filteredReadings = selectedSiteId 
-    ? readings?.filter((r: Reading) => r.siteId === selectedSiteId)
-    : readings;
+  const now = new Date();
+  const currentWindowStart = startOfDay(subDays(now, CURRENT_WINDOW_DAYS - 1));
+  const previousWindowStart = startOfDay(subDays(currentWindowStart, CURRENT_WINDOW_DAYS));
 
-  // Calculate Aggregates (use filtered readings for display)
-  const totalProduction = filteredReadings?.reduce((sum: number, r: Reading) => sum + r.energyWh, 0) || 0;
-  const activeSites = sites?.filter(s => s.status !== 'error').length || 0;
-  
-  // Format data for chart (use filtered readings)
-  const chartData: ChartDataPoint[] = filteredReadings?.reduce((acc: ChartDataPoint[], curr: Reading) => {
-    const dateStr = format(new Date(curr.timestamp), 'MMM dd');
-    const existing = acc.find(item => item.date === dateStr);
-    if (existing) {
-      existing.energy += (curr.energyWh / 1000); // Convert to kWh
-    } else {
-      acc.push({ date: dateStr, energy: (curr.energyWh / 1000) });
-    }
-    return acc;
-  }, []) || [];
+  const latestReadingBySite = new Map<number, DashboardLatestReading>(
+    (dashboardSummary?.latestReadings ?? []).map((reading) => [reading.siteId, reading])
+  );
 
-  // Sort chart data by date
-  chartData.sort((a: ChartDataPoint, b: ChartDataPoint) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const chartBuckets = new Map<string, ChartDataPoint>();
+  let currentTotalWh = 0;
+  let previousTotalWh = 0;
+  const reportingSiteIds = new Set<number>();
 
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1
+  for (const point of filteredDailyEnergy) {
+    const readingDate = parseSummaryDate(point.date);
+
+    if (readingDate >= currentWindowStart) {
+      currentTotalWh += point.energyWh;
+      reportingSiteIds.add(point.siteId);
+
+      const bucket = chartBuckets.get(point.date);
+      if (bucket) {
+        bucket.energyWh += point.energyWh;
+        bucket.energyKwh = bucket.energyWh / 1000;
+      } else {
+        chartBuckets.set(point.date, {
+          date: readingDate,
+          label: format(readingDate, "MMM d"),
+          fullLabel: format(readingDate, "EEEE, MMM d"),
+          energyWh: point.energyWh,
+          energyKwh: point.energyWh / 1000,
+        });
       }
+    } else if (readingDate >= previousWindowStart) {
+      previousTotalWh += point.energyWh;
     }
-  };
+  }
 
-  const itemVariants = {
-    hidden: { y: 20, opacity: 0 },
-    visible: { y: 0, opacity: 1 }
-  };
+  const chartData = Array.from(chartBuckets.values()).sort((a, b) => a.date.getTime() - b.date.getTime());
+  const bestDay = chartData.reduce<ChartDataPoint | null>(
+    (best, day) => (!best || day.energyWh > best.energyWh ? day : best),
+    null
+  );
 
-  if (isLoadingSites || isLoadingReadings) {
+  const trendPercent = previousTotalWh > 0
+    ? ((currentTotalWh - previousTotalWh) / previousTotalWh) * 100
+    : null;
+
+  const averageDailyWh = chartData.length > 0 ? currentTotalWh / chartData.length : 0;
+  const activeSitesCount = sites?.length ?? 0;
+  const syncedTodayCount = sites?.filter((site) => site.lastSyncedAt && isToday(new Date(site.lastSyncedAt))).length ?? 0;
+  const sitesNeedingAttention = sites?.filter((site) => site.status === "error").length ?? 0;
+  const staleSitesCount = sites?.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "stale").length ?? 0;
+  const unsyncedSitesCount = sites?.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "never").length ?? 0;
+  const sitesRequiringReview = sites?.filter((site) => siteNeedsReview(site, now)).length ?? 0;
+  const latestSiteSync = sites?.reduce<Date | null>((latest, site) => {
+    if (!site.lastSyncedAt) {
+      return latest;
+    }
+
+    const siteSyncDate = new Date(site.lastSyncedAt);
+    if (!latest || siteSyncDate.getTime() > latest.getTime()) {
+      return siteSyncDate;
+    }
+
+    return latest;
+  }, null) ?? null;
+  const latestSiteSyncLabel = latestSiteSync
+    ? formatDistanceToNow(latestSiteSync, { addSuffix: true })
+    : "No successful sync yet";
+
+  if (isLoadingSites || isLoadingSummary) {
     return (
       <Layout>
         <div className="flex h-[80vh] items-center justify-center">
           <div className="flex flex-col items-center gap-4">
-            <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-            <p className="text-muted-foreground animate-pulse">Loading dashboard...</p>
+            <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary/20 border-t-primary" />
+            <p className="animate-pulse text-muted-foreground">Loading dashboard...</p>
           </div>
         </div>
       </Layout>
@@ -87,16 +180,16 @@ export default function Dashboard() {
   if (sites?.length === 0) {
     return (
       <Layout>
-        <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-4">
-          <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center">
-            <Activity className="w-8 h-8 text-muted-foreground" />
+        <div className="flex h-[60vh] flex-col items-center justify-center space-y-4 rounded-[2rem] border border-dashed border-border bg-card/70 px-6 text-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
+            <Sun className="h-8 w-8 text-muted-foreground" />
           </div>
           <h2 className="text-2xl font-bold">No Active Sites</h2>
-          <p className="text-muted-foreground max-w-xs">
+          <p className="max-w-xs text-muted-foreground">
             Add a solar portal or restore an archived site to monitor production data.
           </p>
           <a href="/sites">
-            <Button size="lg" className="rounded-full">
+            <Button size="lg" className="rounded-full px-6">
               Manage Sites
             </Button>
           </a>
@@ -107,199 +200,306 @@ export default function Dashboard() {
 
   return (
     <Layout>
-      <motion.div 
-        variants={containerVariants}
-        initial="hidden"
-        animate="visible"
-        className="space-y-8"
-      >
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-          <div>
-            <h2 className="text-3xl font-bold font-display text-foreground tracking-tight">
-              {selectedSite ? selectedSite.name : "Overview"}
-            </h2>
-            <p className="text-muted-foreground mt-1">
-              {selectedSite 
-                ? "Production data for this site only." 
-                : "Summary of your solar production performance."}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {selectedSite && (
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => setSelectedSiteId(null)}
-                className="rounded-full gap-1"
-                data-testid="button-clear-filter"
-              >
-                <X className="w-4 h-4" />
-                Show All Sites
-              </Button>
-            )}
-            <div className="text-sm font-medium px-4 py-2 bg-white dark:bg-card rounded-full border shadow-sm text-muted-foreground">
-              Last updated: {format(new Date(), 'MMM dd, HH:mm')}
-            </div>
-            <Button asChild variant="outline" size="sm" className="rounded-full gap-2">
-              <a href={buildExportUrl()}>
-                <Download className="w-4 h-4" />
-                Export CSV
-              </a>
-            </Button>
-          </div>
-        </div>
+      <div className="space-y-6 md:space-y-8">
+        <section className="rounded-[2rem] border border-border/60 bg-card/80 p-5 shadow-sm shadow-slate-950/5 backdrop-blur-sm md:p-7">
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+            <div className="space-y-4">
+              <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+                {selectedSite ? "Focused View" : "Portfolio Overview"}
+              </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <motion.div variants={itemVariants}>
-            <StatCard
-              title="Total Production (30 Days)"
-              value={`${(totalProduction / 1000).toFixed(1)} kWh`}
-              icon={<Zap className="w-5 h-5 text-amber-500" />}
-              trend="+12.5%"
-              trendUp={true}
-              description="Compared to previous week"
-            />
-          </motion.div>
+              <div className="space-y-2">
+                <h2 className="text-3xl font-bold font-display tracking-tight text-foreground md:text-4xl">
+                  {selectedSite ? selectedSite.name : "Overview"}
+                </h2>
+                <p className="max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">
+                  {selectedSite
+                    ? "Track this system’s recent production, watch for stale syncs, and export its latest readings."
+                    : "Compare recent production, keep an eye on sync freshness, and jump straight to any site that needs attention."}
+                </p>
+              </div>
 
-          <motion.div variants={itemVariants}>
-            <StatCard
-              title="Active Portals"
-              value={activeSites}
-              icon={<Sun className="w-5 h-5 text-orange-500" />}
-              description={`Total ${sites?.length || 0} active sites configured`}
-            />
-          </motion.div>
-
-          <motion.div variants={itemVariants}>
-            <StatCard
-              title="CO₂ Offset"
-              value={`${((totalProduction / 1000) * 0.39).toFixed(1)} kg`}
-              icon={<Activity className="w-5 h-5 text-green-500" />}
-              description="Equivalent to planting 2 trees"
-            />
-          </motion.div>
-        </div>
-
-        {/* Main Chart Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Area Chart */}
-          <motion.div variants={itemVariants} className="lg:col-span-2 bg-card rounded-2xl border border-border/50 shadow-sm p-6">
-            <div className="flex items-center justify-between mb-8">
-              <div>
-                <h3 className="text-lg font-bold text-foreground">Production Trend</h3>
-                <p className="text-sm text-muted-foreground">Daily energy generation in kWh</p>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full border border-border bg-background/80 px-3 py-2 text-sm text-foreground">
+                  {activeSitesCount} active site{activeSitesCount === 1 ? "" : "s"}
+                </span>
+                <span className="rounded-full border border-border bg-background/80 px-3 py-2 text-sm text-muted-foreground">
+                  Latest sync {latestSiteSyncLabel}
+                </span>
+                <span className="rounded-full border border-border bg-background/80 px-3 py-2 text-sm text-muted-foreground">
+                  {sitesNeedingAttention > 0
+                    ? `${sitesNeedingAttention} site${sitesNeedingAttention === 1 ? "" : "s"} need attention`
+                    : staleSitesCount > 0
+                    ? `${staleSitesCount} stale sync${staleSitesCount === 1 ? "" : "s"}`
+                    : unsyncedSitesCount > 0
+                    ? `${unsyncedSitesCount} site${unsyncedSitesCount === 1 ? "" : "s"} not synced yet`
+                    : syncedTodayCount > 0
+                    ? `${syncedTodayCount} site${syncedTodayCount === 1 ? "" : "s"} synced today`
+                    : "All sites recently synced"}
+                </span>
               </div>
             </div>
-            
-            <div className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorEnergy" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                  <XAxis 
-                    dataKey="date" 
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                    dy={10}
-                  />
-                  <YAxis 
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="energy" 
-                    stroke="hsl(var(--primary))" 
-                    strokeWidth={3}
-                    fillOpacity={1} 
-                    fill="url(#colorEnergy)" 
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </motion.div>
 
-          {/* Recent Activity / Side Panel */}
-          <motion.div variants={itemVariants} className="bg-card rounded-2xl border border-border/50 shadow-sm p-6 flex flex-col">
-            <h3 className="text-lg font-bold text-foreground mb-6">Site Performance</h3>
-            <div className="space-y-6 flex-1 overflow-y-auto pr-2">
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" className="rounded-full px-4">
+                <a href={buildExportUrl()}>
+                  <Download className="h-4 w-4" />
+                  Export CSV
+                </a>
+              </Button>
+            </div>
+          </div>
+
+          {(sites?.length ?? 0) > 1 && (
+            <div className="mt-6 space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                Quick Filters
+              </p>
+              <div className="md:hidden">
+                <Select
+                  value={selectedSiteId == null ? "all" : String(selectedSiteId)}
+                  onValueChange={(value) => setSelectedSiteId(value === "all" ? null : Number(value))}
+                >
+                  <SelectTrigger className="h-11 rounded-2xl border-border/70 bg-background/90 px-4 text-left shadow-sm">
+                    <SelectValue placeholder="All Sites" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl">
+                    <SelectItem value="all">All Sites</SelectItem>
+                    {sites?.map((site) => (
+                      <SelectItem key={site.id} value={String(site.id)}>
+                        {site.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="hidden gap-2 overflow-x-auto pb-1 md:flex">
+                <button
+                  type="button"
+                  onClick={() => setSelectedSiteId(null)}
+                  className={cn(
+                    "shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition-colors",
+                    selectedSiteId === null
+                      ? "border-primary/20 bg-primary text-primary-foreground shadow-sm shadow-primary/20"
+                      : "border-border bg-background/80 text-muted-foreground hover:border-primary/20 hover:text-foreground"
+                  )}
+                  data-testid="button-clear-filter"
+                >
+                  All Sites
+                </button>
+                {sites?.map((site) => (
+                  <button
+                    key={site.id}
+                    type="button"
+                    onClick={() => setSelectedSiteId(site.id)}
+                    className={cn(
+                      "shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition-colors",
+                      selectedSiteId === site.id
+                        ? "border-primary/20 bg-primary text-primary-foreground shadow-sm shadow-primary/20"
+                        : "border-border bg-background/80 text-muted-foreground hover:border-primary/20 hover:text-foreground"
+                    )}
+                  >
+                    {site.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div>
+            <StatCard
+              title="30-Day Production"
+              value={formatEnergy(currentTotalWh)}
+              icon={<Zap className="h-5 w-5 text-amber-500" />}
+              trend={
+                trendPercent === null
+                  ? undefined
+                  : `${trendPercent > 0 ? "+" : ""}${trendPercent.toFixed(0)}%`
+              }
+              trendUp={trendPercent == null ? undefined : trendPercent >= 0}
+              description={
+                previousTotalWh > 0
+                  ? "Compared with the previous 30-day window."
+                  : `${chartData.length} reporting day${chartData.length === 1 ? "" : "s"} in this view.`
+              }
+            />
+          </div>
+
+          <div>
+            <StatCard
+              title="Average Reporting Day"
+              value={chartData.length > 0 ? formatEnergy(averageDailyWh) : "No data"}
+              icon={<LineChart className="h-5 w-5 text-sky-500" />}
+              description={
+                chartData.length > 0
+                  ? `${chartData.length} day${chartData.length === 1 ? "" : "s"} with readings in the last 30 days.`
+                  : "Sync a site to populate this card."
+              }
+            />
+          </div>
+
+          <div>
+            <StatCard
+              title="Peak Production Day"
+              value={bestDay ? formatEnergy(bestDay.energyWh) : "No data"}
+              icon={<Sun className="h-5 w-5 text-orange-500" />}
+              description={
+                bestDay
+                  ? `${bestDay.fullLabel} was the strongest production day in view.`
+                  : "Peak-day insight will appear after the next successful sync."
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,1fr)]">
+          <Suspense
+            fallback={(
+              <section className="rounded-[2rem] border border-border/60 bg-card/95 p-5 shadow-sm shadow-slate-950/5 md:p-6">
+                <div className="mb-6 flex items-start justify-between gap-4">
+                  <div className="space-y-2">
+                    <div className="h-6 w-40 animate-pulse rounded-full bg-muted/50" />
+                    <div className="h-4 w-56 animate-pulse rounded-full bg-muted/40" />
+                  </div>
+                  <div className="h-8 w-28 animate-pulse rounded-full bg-muted/40" />
+                </div>
+                <div className="h-[320px] rounded-[1.5rem] bg-muted/20" />
+              </section>
+            )}
+          >
+            <ProductionTrendChart
+              chartData={chartData}
+              currentWindowDays={CURRENT_WINDOW_DAYS}
+              reportingSiteCount={reportingSiteIds.size}
+            />
+          </Suspense>
+
+          <section className="flex flex-col rounded-[2rem] border border-border/60 bg-card/95 p-5 shadow-sm shadow-slate-950/5 md:p-6">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-bold text-foreground">Site Health</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {sitesRequiringReview > 0
+                    ? `${sitesRequiringReview} site${sitesRequiringReview === 1 ? "" : "s"} currently need review.`
+                    : "Tap a site to focus the dashboard on it without leaving this page."}
+                </p>
+              </div>
+              {selectedSite && (
+                <span className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                  Filtered
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-3 overflow-y-auto pr-1">
               {sites?.map((site) => {
-                // Find latest reading for this site
-                const siteReadings = readings?.filter((r: Reading) => r.siteId === site.id) || [];
-                const latestReading = siteReadings[0];
-                const production = latestReading ? (latestReading.energyWh / 1000).toFixed(2) : "0.00";
+                const latestReading = latestReadingBySite.get(site.id);
+                const portalUrl = isUsableUrl(site.url) ? site.url : null;
                 const isSelected = selectedSiteId === site.id;
+                const readingDate = latestReading ? new Date(latestReading.timestamp) : null;
+                const latestReadingLabel = latestReading
+                  ? isToday(readingDate!)
+                    ? "Today"
+                    : format(readingDate!, "MMM d")
+                  : "Awaiting data";
+                const syncLabel = site.lastSyncedAt
+                  ? `Last synced ${formatDistanceToNow(new Date(site.lastSyncedAt), { addSuffix: true })}`
+                  : "Never synced";
 
                 return (
-                  <div 
-                    key={site.id} 
+                  <div
+                    key={site.id}
                     onClick={() => setSelectedSiteId(isSelected ? null : site.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedSiteId(isSelected ? null : site.id);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
                     className={cn(
-                      "flex items-center justify-between group p-3 rounded-xl transition-colors cursor-pointer",
-                      isSelected 
-                        ? "bg-primary/10 ring-2 ring-primary/30" 
-                        : "hover:bg-muted/50"
+                      "rounded-[1.5rem] border p-4 transition-all focus:outline-none focus:ring-2 focus:ring-primary/20",
+                      isSelected
+                        ? "border-primary/30 bg-primary/10 shadow-sm shadow-primary/10"
+                        : "border-border/70 bg-background/70 hover:border-primary/20 hover:bg-background"
                     )}
                     data-testid={`site-card-${site.id}`}
                   >
-                    <div className="flex items-center gap-3">
-                      <div className={cn(
-                        "w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm",
-                        isSelected 
-                          ? "bg-primary text-primary-foreground" 
-                          : "bg-orange-100 text-orange-600"
-                      )}>
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={cn(
+                          "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-bold",
+                          isSelected
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-orange-100 text-orange-700"
+                        )}
+                      >
                         {site.name.charAt(0).toUpperCase()}
                       </div>
-                      <div>
-                        <p className="font-medium text-sm text-foreground">{site.name}</p>
-                        <p className="text-xs text-muted-foreground capitalize">{site.scraperType} Portal</p>
+
+                      <div className="min-w-0 flex-1 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-foreground">{site.name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {formatScraperLabel(site.scraperType)} portal
+                            </p>
+                          </div>
+
+                          {portalUrl && (
+                            <a
+                              href={portalUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(event) => event.stopPropagation()}
+                              className="rounded-full border border-border bg-card/80 p-2 text-muted-foreground transition-colors hover:border-primary/20 hover:text-primary"
+                              title="Open portal"
+                              data-testid={`link-portal-${site.id}`}
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </a>
+                          )}
+                        </div>
+
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="rounded-2xl border border-border/60 bg-card/90 px-3 py-2.5">
+                            <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                              {latestReadingLabel}
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-foreground">
+                              {latestReading ? formatEnergy(latestReading.energyWh, 2) : "No reading yet"}
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-border/60 bg-card/90 px-3 py-2.5">
+                            <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                              Live Output
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-foreground">
+                              {formatPower(latestReading?.powerW)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <StatusBadge
+                            status={site.status as "idle" | "scraping" | "error"}
+                            lastError={site.lastError}
+                            lastSyncedAt={site.lastSyncedAt}
+                          />
+                          <span className="text-xs text-muted-foreground">{syncLabel}</span>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="text-right">
-                        <p className="font-bold text-sm text-foreground">{production} kWh</p>
-                        <p className="text-xs text-green-600 flex items-center justify-end gap-1">
-                          <ArrowUpRight className="w-3 h-3" />
-                          Today
-                        </p>
-                      </div>
-                      <a
-                        href={site.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="p-2 rounded-lg hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
-                        title="Open portal"
-                        data-testid={`link-portal-${site.id}`}
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                      </a>
                     </div>
                   </div>
                 );
               })}
-              
-              {sites?.length === 0 && (
-                <div className="text-center py-10 text-muted-foreground">
-                  <p>No sites configured yet.</p>
-                </div>
-              )}
             </div>
-          </motion.div>
+          </section>
         </div>
-      </motion.div>
+      </div>
     </Layout>
   );
 }

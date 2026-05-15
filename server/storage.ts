@@ -25,6 +25,24 @@ export interface ReadingBounds {
   count: number;
 }
 
+export interface DashboardDailyEnergyRow {
+  siteId: number;
+  date: string;
+  energyWh: number;
+}
+
+export interface DashboardLatestReadingRow {
+  siteId: number;
+  timestamp: Date;
+  energyWh: number;
+  powerW: number | null;
+}
+
+export interface DashboardSummary {
+  dailyEnergy: DashboardDailyEnergyRow[];
+  latestReadings: DashboardLatestReadingRow[];
+}
+
 export interface IStorage {
   // Sites
   getSites(filters?: SiteFilters): Promise<Site[]>;
@@ -43,6 +61,7 @@ export interface IStorage {
     sortOrder?: "asc" | "desc",
     filters?: ReadingFilters,
   ): Promise<Reading[]>;
+  getDashboardSummary(from: Date): Promise<DashboardSummary>;
   addReadings(readings: InsertReading[]): Promise<Reading[]>;
   upsertReadings(readings: InsertReading[]): Promise<Reading[]>;
   getLastReading(siteId: number): Promise<Reading | undefined>;
@@ -147,6 +166,60 @@ export class DatabaseStorage implements IStorage {
   async addReadings(newReadings: InsertReading[]): Promise<Reading[]> {
     if (newReadings.length === 0) return [];
     return await db.insert(readings).values(newReadings).returning();
+  }
+
+  async getDashboardSummary(from: Date): Promise<DashboardSummary> {
+    const activeSiteCondition = isNull(sites.archivedAt);
+
+    const dailyEnergy = await db.select({
+      siteId: readings.siteId,
+      date: sql<string>`to_char(date_trunc('day', ${readings.timestamp}), 'YYYY-MM-DD')`,
+      energyWh: sql<number>`sum(${readings.energyWh})::float`,
+    })
+      .from(readings)
+      .innerJoin(sites, eq(readings.siteId, sites.id))
+      .where(and(
+        activeSiteCondition,
+        gte(readings.timestamp, from),
+      ))
+      .groupBy(
+        readings.siteId,
+        sql`date_trunc('day', ${readings.timestamp})`,
+      )
+      .orderBy(
+        asc(sql`date_trunc('day', ${readings.timestamp})`),
+        asc(readings.siteId),
+      );
+
+    const latestReadingsQuery = db.select({
+      siteId: readings.siteId,
+      latestTimestamp: sql<Date>`max(${readings.timestamp})`.as("latest_timestamp"),
+    })
+      .from(readings)
+      .innerJoin(sites, eq(readings.siteId, sites.id))
+      .where(activeSiteCondition)
+      .groupBy(readings.siteId)
+      .as("latest_readings");
+
+    const latestReadings = await db.select({
+      siteId: readings.siteId,
+      timestamp: readings.timestamp,
+      energyWh: readings.energyWh,
+      powerW: readings.powerW,
+    })
+      .from(readings)
+      .innerJoin(
+        latestReadingsQuery,
+        and(
+          eq(readings.siteId, latestReadingsQuery.siteId),
+          eq(readings.timestamp, latestReadingsQuery.latestTimestamp),
+        ),
+      );
+
+    return {
+      dailyEnergy,
+      latestReadings,
+    };
   }
 
   async upsertReadings(newReadings: InsertReading[]): Promise<Reading[]> {

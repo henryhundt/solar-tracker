@@ -201,6 +201,29 @@ export async function registerRoutes(
   });
 
   // Readings Route
+  app.get(api.readings.summary.path, async (req, res) => {
+    try {
+      const from = req.query.from ? new Date(String(req.query.from)) : undefined;
+      const summary = await storage.getDashboardSummary(from ?? new Date(0));
+
+      res.json({
+        dailyEnergy: summary.dailyEnergy.map((point) => ({
+          siteId: point.siteId,
+          date: point.date,
+          energyWh: point.energyWh,
+        })),
+        latestReadings: summary.latestReadings.map((reading) => ({
+          siteId: reading.siteId,
+          timestamp: new Date(reading.timestamp).toISOString(),
+          energyWh: reading.energyWh,
+          powerW: reading.powerW,
+        })),
+      });
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch dashboard summary" });
+    }
+  });
+
   app.get(api.readings.list.path, async (req, res) => {
     try {
       // Manual parsing since query params are strings

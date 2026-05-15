@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { insertSiteSchema, readings, type AuthSessionResponse, type PublicSite } from './schema';
+import {
+  insertSiteSchema,
+  readings,
+  type AuthSessionResponse,
+  type DashboardSummaryResponse,
+  type PublicSite,
+} from './schema';
 import { eGaugeRegisterInspectionSchema } from './egauge';
 
 // ============================================
@@ -143,6 +149,16 @@ export const api = {
     },
   },
   readings: {
+    summary: {
+      method: 'GET' as const,
+      path: '/api/readings/summary',
+      input: z.object({
+        from: z.string().optional(),
+      }).optional(),
+      responses: {
+        200: z.custom<DashboardSummaryResponse>(),
+      },
+    },
     list: {
       method: 'GET' as const,
       path: '/api/readings',

@@ -84,3 +84,21 @@ export interface AuthSessionResponse {
   authenticated: boolean;
   username?: string;
 }
+
+export interface DashboardDailyEnergyPoint {
+  siteId: number;
+  date: string;
+  energyWh: number;
+}
+
+export interface DashboardLatestReading {
+  siteId: number;
+  timestamp: string;
+  energyWh: number;
+  powerW: number | null;
+}
+
+export interface DashboardSummaryResponse {
+  dailyEnergy: DashboardDailyEnergyPoint[];
+  latestReadings: DashboardLatestReading[];
+}

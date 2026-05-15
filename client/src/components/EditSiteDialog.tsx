@@ -1,4 +1,5 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import type { ReactNode } from "react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,9 +36,10 @@ type CredentialMode = "direct" | "secret";
 
 interface EditSiteDialogProps {
   site: PublicSite;
+  trigger?: ReactNode;
 }
 
-export function EditSiteDialog({ site }: EditSiteDialogProps) {
+export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
   const initialEGaugeConfig = parseEGaugeProviderConfig(site.providerConfig);
   const initialAlsoEnergyConfig = parseAlsoEnergyProviderConfig(site.providerConfig);
   const [open, setOpen] = useState(false);
@@ -401,18 +403,23 @@ export function EditSiteDialog({ site }: EditSiteDialogProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg"
-          data-testid={`button-edit-site-${site.id}`}
-        >
-          <Pencil className="w-4 h-4" />
-        </Button>
+        {trigger ?? (
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg"
+            data-testid={`button-edit-site-${site.id}`}
+          >
+            <Pencil className="w-4 h-4" />
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-[425px] rounded-2xl">
         <DialogHeader>
           <DialogTitle className="font-display text-xl">Edit Site</DialogTitle>
+          <DialogDescription>
+            Update the saved portal details, keep existing credentials by leaving secret fields blank, and verify provider-specific settings before saving.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 pt-4">
           <div className="space-y-2">

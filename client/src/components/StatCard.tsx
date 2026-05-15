@@ -15,27 +15,31 @@ export function StatCard({ title, value, icon, trend, trendUp, className, descri
   return (
     <div
       className={cn(
-        "relative overflow-hidden bg-card rounded-2xl p-6 border border-border/50 shadow-sm transition-all duration-300 hover:shadow-md",
+        "relative overflow-hidden rounded-[1.75rem] border border-border/60 bg-card/95 p-5 shadow-sm shadow-slate-950/5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-slate-950/5",
         className
       )}
     >
-      <div className="flex justify-between items-start">
-        <div className="space-y-4">
-          <div className="p-2.5 bg-background rounded-xl border border-border w-fit shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 space-y-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-border/70 bg-background/90 shadow-sm">
             {icon}
           </div>
-          <div>
-            <p className="text-sm font-medium text-muted-foreground mb-1">{title}</p>
-            <h3 className="text-3xl font-bold font-display tracking-tight text-foreground">{value}</h3>
+          <div className="space-y-1.5">
+            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              {title}
+            </p>
+            <h3 className="text-3xl font-bold font-display tracking-tight text-foreground sm:text-[2rem]">
+              {value}
+            </h3>
           </div>
         </div>
         {trend && (
           <div
             className={cn(
-              "px-2.5 py-1 rounded-full text-xs font-semibold border",
+              "shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold",
               trendUp
-                ? "bg-green-50 text-green-700 border-green-200"
-                : "bg-red-50 text-red-700 border-red-200"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border-rose-200 bg-rose-50 text-rose-700"
             )}
           >
             {trend}
@@ -43,11 +47,10 @@ export function StatCard({ title, value, icon, trend, trendUp, className, descri
         )}
       </div>
       {description && (
-        <p className="mt-4 text-sm text-muted-foreground">{description}</p>
+        <p className="mt-4 max-w-xs text-sm leading-6 text-muted-foreground">{description}</p>
       )}
       
-      {/* Decorative gradient blob */}
-      <div className="absolute -right-6 -top-6 w-24 h-24 bg-gradient-to-br from-primary/10 to-transparent rounded-full blur-2xl pointer-events-none" />
+      <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-gradient-to-br from-primary/12 to-transparent blur-2xl" />
     </div>
   );
 }

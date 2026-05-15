@@ -1,4 +1,4 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -452,6 +452,9 @@ export function AddSiteDialog() {
           <DialogTitle className="font-display text-xl">
             {bulkDialogTitle}
           </DialogTitle>
+          <DialogDescription>
+            Add a portal connection, test credentials when needed, and save the site with only the fields required for its scraper type.
+          </DialogDescription>
         </DialogHeader>
 
         {supportsAccountDiscovery ? (

@@ -1,16 +1,26 @@
-import { useArchiveSite, useDeleteSite, useRestoreSite, useScrapeSite, useSites } from "@/hooks/use-sites";
-import { Layout } from "@/components/Layout";
-import { AddSiteDialog } from "@/components/AddSiteDialog";
-import { EditSiteDialog } from "@/components/EditSiteDialog";
-import { StatusBadge } from "@/components/StatusBadge";
+import { lazy, Suspense } from "react";
+import { format, formatDistanceToNow } from "date-fns";
+import {
+  AlertCircle,
+  Archive,
+  Download,
+  ExternalLink,
+  Hash,
+  Key,
+  Pencil,
+  RefreshCw,
+  RotateCcw,
+  Sun,
+  Trash2,
+} from "lucide-react";
 import { parseEGaugeProviderConfig } from "@shared/egauge";
 import { type PublicSite } from "@shared/schema";
+import { Layout } from "@/components/Layout";
+import { StatusBadge } from "@/components/StatusBadge";
+import { getSyncHealth, siteNeedsReview } from "@/lib/site-health";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
-import { Archive, CalendarClock, Download, ExternalLink, Hash, Key, RefreshCw, RotateCcw, Sun, Trash2 } from "lucide-react";
-import { format } from "date-fns";
-import { motion } from "framer-motion";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,6 +32,19 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { useArchiveSite, useDeleteSite, useRestoreSite, useScrapeSite, useSites } from "@/hooks/use-sites";
+
+const AddSiteDialog = lazy(() =>
+  import("@/components/AddSiteDialog").then((module) => ({
+    default: module.AddSiteDialog,
+  }))
+);
+
+const EditSiteDialog = lazy(() =>
+  import("@/components/EditSiteDialog").then((module) => ({
+    default: module.EditSiteDialog,
+  }))
+);
 
 function getSiteHostname(url: string) {
   try {
@@ -31,98 +54,193 @@ function getSiteHostname(url: string) {
   }
 }
 
+function isUsableUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return Boolean(parsed.protocol && parsed.host);
+  } catch {
+    return false;
+  }
+}
+
+function formatScraperLabel(scraperType: string) {
+  const labels: Record<string, string> = {
+    alsoenergy: "AlsoEnergy",
+    egauge: "eGauge",
+    mock: "Mock",
+    solaredge_api: "SolarEdge API",
+    solaredge_browser: "SolarEdge Browser",
+  };
+
+  return labels[scraperType] ?? scraperType
+    .replace(/_/g, " ")
+    .replace(/\bapi\b/gi, "API")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function getSystemSizeLabel(site: PublicSite) {
+  if (site.acCapacityKw == null && site.dcCapacityKw == null) {
+    return null;
+  }
+
+  return [
+    site.acCapacityKw != null ? `${site.acCapacityKw} kW AC` : null,
+    site.dcCapacityKw != null ? `${site.dcCapacityKw} kW DC` : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function formatSyncRelative(timestamp?: Date | string | null) {
+  if (!timestamp) {
+    return "Never synced";
+  }
+
+  return formatDistanceToNow(new Date(timestamp), { addSuffix: true });
+}
+
+function formatSyncExact(timestamp?: Date | string | null) {
+  if (!timestamp) {
+    return "No sync recorded";
+  }
+
+  return format(new Date(timestamp), "MMM d, yyyy 'at' HH:mm");
+}
+
+function SummaryCard({
+  icon,
+  label,
+  value,
+  description,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string | number;
+  description: string;
+}) {
+  return (
+    <div className="rounded-[1.75rem] border border-border/60 bg-card/90 p-5 shadow-sm shadow-slate-950/5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-border/70 bg-background/90 shadow-sm">
+          {icon}
+        </div>
+        <div className="text-right">
+          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+            {label}
+          </p>
+          <p className="mt-1 text-3xl font-bold font-display tracking-tight text-foreground">
+            {value}
+          </p>
+        </div>
+      </div>
+      <p className="mt-4 text-sm leading-6 text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+function DetailTile({
+  label,
+  value,
+  caption,
+}: {
+  label: string;
+  value: React.ReactNode;
+  caption?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
+      <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+        {label}
+      </p>
+      <div className="mt-2 text-sm font-medium text-foreground">{value}</div>
+      {caption && <p className="mt-1 text-xs leading-5 text-muted-foreground">{caption}</p>}
+    </div>
+  );
+}
+
 function SiteDetails({ site, archived }: { site: PublicSite; archived?: boolean }) {
   const eGaugeConfig = site.scraperType === "egauge"
     ? parseEGaugeProviderConfig(site.providerConfig)
     : null;
+  const systemSize = getSystemSizeLabel(site);
 
   return (
-    <>
-      {!archived && (
-        <div className="flex justify-between items-center p-3 bg-muted/50 rounded-xl">
-          <span className="text-sm font-medium text-muted-foreground">Status</span>
-          <StatusBadge
-            status={site.status as "idle" | "scraping" | "error"}
-            lastError={site.lastError}
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {!archived && (
+          <DetailTile
+            label="Status"
+            value={
+              <StatusBadge
+                status={site.status as "idle" | "scraping" | "error"}
+                lastError={site.lastError}
+                lastSyncedAt={site.lastSyncedAt}
+              />
+            }
           />
-        </div>
-      )}
+        )}
 
-      {archived && site.archivedAt && (
-        <div className="flex justify-between items-center text-sm">
-          <span className="text-muted-foreground flex items-center gap-1.5">
-            <Archive className="w-4 h-4" /> Archived
-          </span>
-          <span className="font-medium text-foreground">
-            {format(new Date(site.archivedAt), "MMM dd, yyyy")}
-          </span>
-        </div>
-      )}
+        <DetailTile
+          label={archived ? "Archived On" : "Last Synced"}
+          value={archived && site.archivedAt ? format(new Date(site.archivedAt), "MMM d, yyyy") : formatSyncRelative(site.lastSyncedAt)}
+          caption={archived ? undefined : formatSyncExact(site.lastSyncedAt)}
+        />
 
-      <div className="flex justify-between items-center text-sm">
-        <span className="text-muted-foreground flex items-center gap-1.5">
-          <CalendarClock className="w-4 h-4" /> Last Synced
-        </span>
-        <span className="font-medium text-foreground">
-          {site.lastSyncedAt
-            ? format(new Date(site.lastSyncedAt), "MMM dd, HH:mm")
-            : "Never"}
-        </span>
+        <DetailTile
+          label="Portal Type"
+          value={formatScraperLabel(site.scraperType)}
+        />
+
+        {systemSize && (
+          <DetailTile
+            label="System Size"
+            value={systemSize}
+          />
+        )}
       </div>
 
-      {site.siteIdentifier && (
-        <div className="flex justify-between items-center text-sm">
-          <span className="text-muted-foreground flex items-center gap-1.5">
-            <Hash className="w-4 h-4" /> Site ID
-          </span>
-          <span className="font-mono text-xs bg-muted px-2 py-1 rounded-lg" data-testid={`text-site-identifier-${site.id}`}>
-            {site.siteIdentifier}
-          </span>
+      {(site.siteIdentifier || site.credentialKey || (eGaugeConfig && eGaugeConfig.selectedRegisters.length > 0)) && (
+        <div className="flex flex-wrap gap-2">
+          {site.siteIdentifier && (
+            <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+              <Hash className="mr-1 h-3 w-3" />
+              {site.siteIdentifier}
+            </Badge>
+          )}
+
+          {site.credentialKey && (
+            <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+              <Key className="mr-1 h-3 w-3" />
+              {site.credentialKey}
+            </Badge>
+          )}
+
+          {eGaugeConfig && eGaugeConfig.selectedRegisters.length > 0 && (
+            <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+              <Sun className="mr-1 h-3 w-3" />
+              {eGaugeConfig.selectedRegisters.length} register{eGaugeConfig.selectedRegisters.length === 1 ? "" : "s"}
+            </Badge>
+          )}
         </div>
       )}
 
-      {site.credentialKey && (
-        <div className="flex justify-between items-center text-sm">
-          <span className="text-muted-foreground flex items-center gap-1.5">
-            <Key className="w-4 h-4" /> Credentials
-          </span>
-          <span className="font-mono text-xs bg-muted px-2 py-1 rounded-lg" data-testid={`text-credential-key-${site.id}`}>
-            {site.credentialKey}
-          </span>
-        </div>
-      )}
-
-      {eGaugeConfig && eGaugeConfig.selectedRegisters.length > 0 && (
-        <div className="flex justify-between items-center text-sm">
-          <span className="text-muted-foreground flex items-center gap-1.5">
-            <Sun className="w-4 h-4" /> Registers
-          </span>
-          <span className="font-medium text-foreground" data-testid={`text-egauge-register-count-${site.id}`}>
-            {eGaugeConfig.selectedRegisters.length} selected
-          </span>
-        </div>
-      )}
-
-      {(site.acCapacityKw != null || site.dcCapacityKw != null) && (
-        <div className="flex justify-between items-center text-sm">
-          <span className="text-muted-foreground">System Size</span>
-          <span className="font-medium text-foreground" data-testid={`text-site-capacity-${site.id}`}>
-            {site.acCapacityKw != null ? `${site.acCapacityKw} kW AC` : ""}
-            {site.acCapacityKw != null && site.dcCapacityKw != null ? " / " : ""}
-            {site.dcCapacityKw != null ? `${site.dcCapacityKw} kW DC` : ""}
-          </span>
+      {site.lastError && site.status === "error" && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {site.lastError}
         </div>
       )}
 
       {site.notes && (
-        <div className="space-y-1 text-sm">
-          <span className="text-muted-foreground">Notes</span>
-          <p className="text-foreground leading-5 max-h-16 overflow-hidden" data-testid={`text-site-notes-${site.id}`}>
+        <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+            Notes
+          </p>
+          <p className="mt-2 text-sm leading-6 text-foreground" data-testid={`text-site-notes-${site.id}`}>
             {site.notes}
           </p>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -134,12 +252,12 @@ function EmptyState({
   description: string;
 }) {
   return (
-    <div className="col-span-full py-16 text-center border-2 border-dashed border-muted rounded-3xl bg-muted/10">
-      <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
-        <Sun className="w-8 h-8 text-muted-foreground" />
+    <div className="col-span-full rounded-[2rem] border border-dashed border-border bg-card/60 px-6 py-16 text-center">
+      <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted">
+        <Sun className="h-8 w-8 text-muted-foreground" />
       </div>
-      <h3 className="text-lg font-semibold mb-2">{title}</h3>
-      <p className="text-muted-foreground max-w-sm mx-auto">
+      <h3 className="text-lg font-semibold text-foreground">{title}</h3>
+      <p className="mx-auto mt-2 max-w-sm text-muted-foreground">
         {description}
       </p>
     </div>
@@ -164,26 +282,17 @@ export default function Sites() {
   const activeSites = sites?.filter((site) => !site.archivedAt) ?? [];
   const archivedSites = (sites?.filter((site) => Boolean(site.archivedAt)) ?? [])
     .sort((a, b) => new Date(b.archivedAt || 0).getTime() - new Date(a.archivedAt || 0).getTime());
-
-  const container = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: { staggerChildren: 0.1 },
-    },
-  };
-
-  const item = {
-    hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0 },
-  };
+  const now = new Date();
+  const sitesNeedingAttention = activeSites.filter((site) => siteNeedsReview(site, now)).length;
+  const staleSitesCount = activeSites.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "stale").length;
+  const unsyncedSitesCount = activeSites.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "never").length;
 
   if (isLoading) {
     return (
       <Layout>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-64 bg-muted/20 animate-pulse rounded-2xl" />
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+          {[1, 2, 3].map((index) => (
+            <div key={index} className="h-72 animate-pulse rounded-[2rem] bg-muted/20" />
           ))}
         </div>
       </Layout>
@@ -192,274 +301,355 @@ export default function Sites() {
 
   return (
     <Layout>
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
-        <div>
-          <h2 className="text-3xl font-bold font-display text-foreground tracking-tight">Solar Sites</h2>
-          <p className="text-muted-foreground mt-1">
-            Manage active portals, archive retired systems, or permanently delete sites and their stored data.
-          </p>
-        </div>
-        <AddSiteDialog />
-      </div>
+      <div className="space-y-8">
+        <section className="rounded-[2rem] border border-border/60 bg-card/80 p-5 shadow-sm shadow-slate-950/5 backdrop-blur-sm md:p-7">
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+                Operations
+              </div>
+              <div>
+                <h2 className="text-3xl font-bold font-display tracking-tight text-foreground md:text-4xl">Solar Sites</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">
+                  Manage active portals, keep archived systems on hand for exports, and make risky actions clearer before you commit them.
+                </p>
+              </div>
+            </div>
 
-      <section className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h3 className="text-xl font-semibold text-foreground">Active Sites</h3>
-            <p className="text-sm text-muted-foreground">Included in dashboard totals and scheduled syncs.</p>
+            <Suspense
+              fallback={(
+                <Button className="rounded-full px-6" disabled>
+                  Loading form...
+                </Button>
+              )}
+            >
+              <AddSiteDialog />
+            </Suspense>
           </div>
-          <Badge variant="secondary" className="rounded-full px-3 py-1">
-            {activeSites.length}
-          </Badge>
-        </div>
 
-        <motion.div
-          variants={container}
-          initial="hidden"
-          animate="show"
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-        >
-          {activeSites.map((site) => {
-            const isSyncing = site.status === "scraping" || (scrapeMutation.isPending && scrapeMutation.variables === site.id);
-            const isArchiving = archiveMutation.isPending && archiveMutation.variables === site.id;
-            const isDeleting = deleteMutation.isPending && deleteMutation.variables === site.id;
-
-            return (
-              <motion.div key={site.id} variants={item}>
-                <Card className="rounded-2xl border-border/50 shadow-sm hover:shadow-md transition-all overflow-hidden group">
-                  <CardHeader className="p-6 pb-4 flex flex-row items-start justify-between space-y-0">
-                    <div className="space-y-1">
-                      <h3 className="font-display font-bold text-lg">{site.name}</h3>
-                      <a
-                        href={site.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
-                      >
-                        {getSiteHostname(site.url)}
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold">
-                      {site.name.charAt(0).toUpperCase()}
-                    </div>
-                  </CardHeader>
-
-                  <CardContent className="p-6 py-4 space-y-4">
-                    <SiteDetails site={site} />
-                  </CardContent>
-
-                  <CardFooter className="p-4 bg-muted/20 flex gap-2 justify-end border-t border-border/50 flex-wrap">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="rounded-lg hover:bg-white hover:text-primary"
-                      onClick={() => scrapeMutation.mutate(site.id)}
-                      disabled={isSyncing || isArchiving || isDeleting}
-                    >
-                      <RefreshCw className={`w-4 h-4 mr-2 ${isSyncing ? "animate-spin" : ""}`} />
-                      {isSyncing ? "Syncing..." : "Sync Now"}
-                    </Button>
-
-                    <Button asChild variant="ghost" size="sm" className="rounded-lg hover:bg-white hover:text-primary">
-                      <a href={buildExportUrl(site.id)}>
-                        <Download className="w-4 h-4 mr-2" />
-                        Export CSV
-                      </a>
-                    </Button>
-
-                    <EditSiteDialog site={site} />
-
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-muted-foreground hover:text-amber-600 hover:bg-amber-50 rounded-lg"
-                          disabled={isSyncing || isArchiving || isDeleting}
-                          title="Archive site"
-                        >
-                          <Archive className="w-4 h-4" />
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent className="rounded-2xl">
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Archive this site?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            This removes <strong>{site.name}</strong> from the dashboard and scheduled syncs, but keeps its stored history so you can restore or export it later.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel className="rounded-xl">Cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={() => archiveMutation.mutate(site.id)}
-                            className="rounded-xl bg-amber-500 hover:bg-amber-600"
-                          >
-                            Archive
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-muted-foreground hover:text-red-500 hover:bg-red-50 rounded-lg"
-                          disabled={isSyncing || isArchiving || isDeleting}
-                          title="Delete site permanently"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent className="rounded-2xl">
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Delete this site permanently?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            This will delete the configuration for <strong>{site.name}</strong> and remove all of its stored historical readings.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel className="rounded-xl">Cancel</AlertDialogCancel>
-                          <AlertDialogAction
-                            onClick={() => deleteMutation.mutate(site.id)}
-                            className="bg-red-500 hover:bg-red-600 rounded-xl"
-                          >
-                            Delete
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  </CardFooter>
-                </Card>
-              </motion.div>
-            );
-          })}
-
-          {activeSites.length === 0 && archivedSites.length === 0 && (
-            <EmptyState
-              title="No Sites Configured"
-              description="Add your first solar portal to start tracking your energy production."
+          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <SummaryCard
+              icon={<Sun className="h-5 w-5 text-amber-500" />}
+              label="Active Sites"
+              value={activeSites.length}
+              description="Included in dashboard totals and scheduled syncs."
             />
-          )}
-
-          {activeSites.length === 0 && archivedSites.length > 0 && (
-            <EmptyState
-              title="No Active Sites"
-              description="All current sites are archived. Restore one below or add a new portal to resume syncing."
+            <SummaryCard
+              icon={<AlertCircle className="h-5 w-5 text-rose-500" />}
+              label="Need Attention"
+              value={sitesNeedingAttention}
+              description={
+                sitesNeedingAttention > 0
+                  ? `${staleSitesCount} stale sync${staleSitesCount === 1 ? "" : "s"}${unsyncedSitesCount > 0 ? `, ${unsyncedSitesCount} not synced yet` : ""}.`
+                  : "All active portals are currently healthy and recently synced."
+              }
             />
-          )}
-        </motion.div>
-      </section>
+            <SummaryCard
+              icon={<Archive className="h-5 w-5 text-slate-500" />}
+              label="Archived"
+              value={archivedSites.length}
+              description="Preserved for export and restore, but kept out of scheduled syncs."
+            />
+          </div>
+        </section>
 
-      {archivedSites.length > 0 && (
-        <section className="space-y-4 mt-10">
+        <section className="space-y-4">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h3 className="text-xl font-semibold text-foreground">Archived Sites</h3>
-              <p className="text-sm text-muted-foreground">Historical readings are preserved here, but archived sites stay out of active syncs.</p>
+              <h3 className="text-xl font-semibold text-foreground">Active Sites</h3>
+              <p className="text-sm text-muted-foreground">Included in dashboard totals and background sync jobs.</p>
             </div>
-            <Badge variant="outline" className="rounded-full px-3 py-1">
-              {archivedSites.length}
+            <Badge variant="secondary" className="rounded-full px-3 py-1">
+              {activeSites.length}
             </Badge>
           </div>
 
-          <motion.div
-            variants={container}
-            initial="hidden"
-            animate="show"
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-          >
-            {archivedSites.map((site) => {
-              const isRestoring = restoreMutation.isPending && restoreMutation.variables === site.id;
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            {activeSites.map((site) => {
+              const isSyncing = site.status === "scraping" || (scrapeMutation.isPending && scrapeMutation.variables === site.id);
+              const isArchiving = archiveMutation.isPending && archiveMutation.variables === site.id;
               const isDeleting = deleteMutation.isPending && deleteMutation.variables === site.id;
+              const portalUrl = isUsableUrl(site.url) ? site.url : null;
 
               return (
-                <motion.div key={site.id} variants={item}>
-                  <Card className="rounded-2xl border-border/50 shadow-sm overflow-hidden bg-muted/10">
-                    <CardHeader className="p-6 pb-4 flex flex-row items-start justify-between space-y-0">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-display font-bold text-lg">{site.name}</h3>
-                          <Badge variant="secondary" className="rounded-full">Archived</Badge>
+                <div key={site.id}>
+                  <Card className="overflow-hidden rounded-[2rem] border-border/60 bg-card/95 shadow-sm shadow-slate-950/5">
+                    <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 p-6 pb-4">
+                      <div className="min-w-0 space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-xl font-bold font-display text-foreground">{site.name}</h3>
+                          <Badge variant="secondary" className="rounded-full">
+                            {formatScraperLabel(site.scraperType)}
+                          </Badge>
                         </div>
-                        <a
-                          href={site.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors"
-                        >
-                          {getSiteHostname(site.url)}
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
+
+                        {portalUrl ? (
+                          <a
+                            href={portalUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-primary"
+                          >
+                            {getSiteHostname(site.url)}
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Portal launches from the stored site identifier.</p>
+                        )}
                       </div>
-                      <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-muted-foreground font-bold">
+
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-base font-bold text-primary">
                         {site.name.charAt(0).toUpperCase()}
                       </div>
                     </CardHeader>
 
-                    <CardContent className="p-6 py-4 space-y-4">
-                      <SiteDetails site={site} archived />
+                    <CardContent className="space-y-4 p-6 pt-0">
+                      <SiteDetails site={site} />
                     </CardContent>
 
-                    <CardFooter className="p-4 bg-muted/20 flex gap-2 justify-end border-t border-border/50 flex-wrap">
-                      <Button asChild variant="ghost" size="sm" className="rounded-lg hover:bg-white hover:text-primary">
-                        <a href={buildExportUrl(site.id)}>
-                          <Download className="w-4 h-4 mr-2" />
-                          Export CSV
-                        </a>
-                      </Button>
+                    <CardFooter className="flex flex-col gap-3 border-t border-border/50 bg-muted/10 p-4">
+                      <div className="grid w-full gap-2 sm:grid-cols-3">
+                        <Button
+                          variant="secondary"
+                          className="w-full rounded-xl"
+                          onClick={() => scrapeMutation.mutate(site.id)}
+                          disabled={isSyncing || isArchiving || isDeleting}
+                        >
+                          <RefreshCw className={`h-4 w-4 ${isSyncing ? "animate-spin" : ""}`} />
+                          {isSyncing ? "Syncing..." : "Sync Now"}
+                        </Button>
 
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="rounded-lg hover:bg-white hover:text-primary"
-                        onClick={() => restoreMutation.mutate(site.id)}
-                        disabled={isRestoring || isDeleting}
-                      >
-                        <RotateCcw className="w-4 h-4 mr-2" />
-                        {isRestoring ? "Restoring..." : "Restore"}
-                      </Button>
+                        <Button asChild variant="outline" className="w-full rounded-xl">
+                          <a href={buildExportUrl(site.id)}>
+                            <Download className="h-4 w-4" />
+                            Export CSV
+                          </a>
+                        </Button>
 
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="text-muted-foreground hover:text-red-500 hover:bg-red-50 rounded-lg"
-                            disabled={isRestoring || isDeleting}
-                            title="Delete archived site permanently"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent className="rounded-2xl">
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete archived site permanently?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This will remove <strong>{site.name}</strong> and permanently erase all of its stored historical readings.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel className="rounded-xl">Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={() => deleteMutation.mutate(site.id)}
-                              className="bg-red-500 hover:bg-red-600 rounded-xl"
+                        <Suspense
+                          fallback={(
+                            <Button
+                              variant="outline"
+                              className="w-full rounded-xl"
+                              disabled
+                              data-testid={`button-edit-site-${site.id}`}
                             >
-                              Delete
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+                              <Pencil className="h-4 w-4" />
+                              Loading Form...
+                            </Button>
+                          )}
+                        >
+                          <EditSiteDialog
+                            site={site}
+                            trigger={
+                              <Button
+                                variant="outline"
+                                className="w-full rounded-xl"
+                                data-testid={`button-edit-site-${site.id}`}
+                              >
+                                <Pencil className="h-4 w-4" />
+                                Edit Site
+                              </Button>
+                            }
+                          />
+                        </Suspense>
+                      </div>
+
+                      <div className="flex w-full flex-col gap-2 sm:flex-row sm:justify-end">
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              className="rounded-xl text-amber-700 hover:bg-amber-50 hover:text-amber-700"
+                              disabled={isSyncing || isArchiving || isDeleting}
+                            >
+                              <Archive className="h-4 w-4" />
+                              Archive Site
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent className="rounded-2xl">
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Archive this site?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This removes <strong>{site.name}</strong> from the dashboard and scheduled syncs, but keeps its stored history so you can restore or export it later.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel className="rounded-xl">Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => archiveMutation.mutate(site.id)}
+                                className="rounded-xl bg-amber-500 hover:bg-amber-600"
+                              >
+                                Archive
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              className="rounded-xl text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                              disabled={isSyncing || isArchiving || isDeleting}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Delete Site
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent className="rounded-2xl">
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete this site permanently?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This will delete the configuration for <strong>{site.name}</strong> and remove all of its stored historical readings.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel className="rounded-xl">Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => deleteMutation.mutate(site.id)}
+                                className="rounded-xl bg-red-500 hover:bg-red-600"
+                              >
+                                Delete
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
                     </CardFooter>
                   </Card>
-                </motion.div>
+                </div>
               );
             })}
-          </motion.div>
+
+            {activeSites.length === 0 && archivedSites.length === 0 && (
+              <EmptyState
+                title="No Sites Configured"
+                description="Add your first solar portal to start tracking your energy production."
+              />
+            )}
+
+            {activeSites.length === 0 && archivedSites.length > 0 && (
+              <EmptyState
+                title="No Active Sites"
+                description="All current sites are archived. Restore one below or add a new portal to resume syncing."
+              />
+            )}
+          </div>
         </section>
-      )}
+
+        {archivedSites.length > 0 && (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-xl font-semibold text-foreground">Archived Sites</h3>
+                <p className="text-sm text-muted-foreground">Historical readings are preserved here, but archived portals stay out of active syncs.</p>
+              </div>
+              <Badge variant="outline" className="rounded-full px-3 py-1">
+                {archivedSites.length}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+              {archivedSites.map((site) => {
+                const isRestoring = restoreMutation.isPending && restoreMutation.variables === site.id;
+                const isDeleting = deleteMutation.isPending && deleteMutation.variables === site.id;
+                const portalUrl = isUsableUrl(site.url) ? site.url : null;
+
+                return (
+                  <div key={site.id}>
+                    <Card className="overflow-hidden rounded-[2rem] border-border/60 bg-card/80 shadow-sm shadow-slate-950/5">
+                      <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 p-6 pb-4">
+                        <div className="min-w-0 space-y-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-xl font-bold font-display text-foreground">{site.name}</h3>
+                            <Badge variant="secondary" className="rounded-full">Archived</Badge>
+                          </div>
+
+                          {portalUrl ? (
+                            <a
+                              href={portalUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-primary"
+                            >
+                              {getSiteHostname(site.url)}
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">Portal URL unavailable</p>
+                          )}
+                        </div>
+
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-muted text-base font-bold text-muted-foreground">
+                          {site.name.charAt(0).toUpperCase()}
+                        </div>
+                      </CardHeader>
+
+                      <CardContent className="space-y-4 p-6 pt-0">
+                        <SiteDetails site={site} archived />
+                      </CardContent>
+
+                      <CardFooter className="flex flex-col gap-3 border-t border-border/50 bg-muted/10 p-4">
+                        <div className="grid w-full gap-2 sm:grid-cols-2">
+                          <Button asChild variant="outline" className="w-full rounded-xl">
+                            <a href={buildExportUrl(site.id)}>
+                              <Download className="h-4 w-4" />
+                              Export CSV
+                            </a>
+                          </Button>
+
+                          <Button
+                            variant="secondary"
+                            className="w-full rounded-xl"
+                            onClick={() => restoreMutation.mutate(site.id)}
+                            disabled={isRestoring || isDeleting}
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                            {isRestoring ? "Restoring..." : "Restore Site"}
+                          </Button>
+                        </div>
+
+                        <div className="flex w-full justify-end">
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                className="rounded-xl text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                                disabled={isRestoring || isDeleting}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete Permanently
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent className="rounded-2xl">
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete archived site permanently?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This will remove <strong>{site.name}</strong> and permanently erase all of its stored historical readings.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel className="rounded-xl">Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => deleteMutation.mutate(site.id)}
+                                  className="rounded-xl bg-red-500 hover:bg-red-600"
+                                >
+                                  Delete
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
+                      </CardFooter>
+                    </Card>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+      </div>
     </Layout>
   );
 }

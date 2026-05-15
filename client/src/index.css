@@ -7,29 +7,61 @@
 :root {
   --font-display: 'Outfit', sans-serif;
   --font-sans: 'Plus Jakarta Sans', sans-serif;
+  --font-serif: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
+  --font-mono: 'SFMono-Regular', 'SF Mono', ui-monospace, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 
   /* Solar/Energy Theme - Bright, Clean, Modern */
   --background: 210 40% 98%;
   --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --card-border: 214 32% 89%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --popover-border: 214 32% 84%;
   
   --primary: 38 92% 50%;      /* Solar Yellow/Orange */
   --primary-foreground: 0 0% 100%;
+  --primary-border: hsl(35 88% 45% / 0.28);
   
   --secondary: 210 40% 96.1%;
   --secondary-foreground: 222 47% 11.2%;
+  --secondary-border: hsl(214 32% 88%);
   
   --muted: 210 40% 96.1%;
   --muted-foreground: 215.4 16.3% 46.9%;
+  --muted-border: hsl(214 32% 88%);
   
   --accent: 210 40% 96.1%;
   --accent-foreground: 222 47% 11.2%;
+  --accent-border: hsl(214 32% 88%);
   
   --destructive: 0 84.2% 60.2%;
   --destructive-foreground: 210 40% 98%;
+  --destructive-border: hsl(0 72% 52% / 0.24);
 
   --border: 214.3 31.8% 91.4%;
   --input: 214.3 31.8% 91.4%;
   --ring: 38 92% 50%;
+  --button-outline: hsl(214 30% 82%);
+  --badge-outline: hsl(214 30% 84%);
+
+  --chart-1: 38 92% 50%;
+  --chart-2: 199 89% 48%;
+  --chart-3: 159 64% 42%;
+  --chart-4: 13 86% 58%;
+  --chart-5: 262 83% 58%;
+
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-border: 214 32% 89%;
+  --sidebar-ring: 38 92% 50%;
+  --sidebar-primary: 38 92% 50%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-primary-border: hsl(35 88% 45% / 0.28);
+  --sidebar-accent: 210 40% 96.1%;
+  --sidebar-accent-foreground: 222 47% 11.2%;
+  --sidebar-accent-border: hsl(214 32% 88%);
   
   --radius: 0.75rem;
 }
@@ -37,37 +69,85 @@
 .dark {
   --background: 222.2 84% 4.9%;
   --foreground: 210 40% 98%;
+  --card: 222 47% 9%;
+  --card-foreground: 210 40% 98%;
+  --card-border: 217 28% 22%;
+  --popover: 222 47% 10%;
+  --popover-foreground: 210 40% 98%;
+  --popover-border: 217 28% 24%;
   
   --primary: 38 92% 50%;
   --primary-foreground: 0 0% 100%;
+  --primary-border: hsl(35 88% 45% / 0.32);
   
   --secondary: 217.2 32.6% 17.5%;
   --secondary-foreground: 210 40% 98%;
+  --secondary-border: hsl(217 26% 23%);
   
   --muted: 217.2 32.6% 17.5%;
   --muted-foreground: 215 20.2% 65.1%;
+  --muted-border: hsl(217 26% 23%);
   
   --accent: 217.2 32.6% 17.5%;
   --accent-foreground: 210 40% 98%;
+  --accent-border: hsl(217 26% 23%);
   
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 210 40% 98%;
+  --destructive-border: hsl(0 72% 48% / 0.36);
   
   --border: 217.2 32.6% 17.5%;
   --input: 217.2 32.6% 17.5%;
   --ring: 38 92% 50%;
+  --button-outline: hsl(217 24% 28%);
+  --badge-outline: hsl(217 24% 30%);
+
+  --chart-1: 38 92% 58%;
+  --chart-2: 199 95% 58%;
+  --chart-3: 159 64% 50%;
+  --chart-4: 13 88% 64%;
+  --chart-5: 262 85% 66%;
+
+  --sidebar: 222 47% 8%;
+  --sidebar-foreground: 210 40% 98%;
+  --sidebar-border: 217 28% 22%;
+  --sidebar-ring: 38 92% 50%;
+  --sidebar-primary: 38 92% 50%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-primary-border: hsl(35 88% 45% / 0.32);
+  --sidebar-accent: 217.2 32.6% 17.5%;
+  --sidebar-accent-foreground: 210 40% 98%;
+  --sidebar-accent-border: hsl(217 26% 23%);
 }
 
 @layer base {
+  html {
+    color-scheme: light;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans);
+    background-image:
+      radial-gradient(circle at top left, rgba(251, 191, 36, 0.12), transparent 34%),
+      radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 24%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.98));
+    background-attachment: fixed;
   }
   
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-display);
     @apply tracking-tight font-semibold;
   }
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+::selection {
+  background: hsl(var(--primary) / 0.22);
+  color: hsl(var(--foreground));
 }
 
 /* Custom Scrollbar for dashboards */

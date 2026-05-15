@@ -52,7 +52,7 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse !== undefined) {
-        logLine += ` :: ${JSON.stringify(redactSensitiveData(capturedJsonResponse))}`;
+        logLine += ` :: ${JSON.stringify(compactLogPayload(redactSensitiveData(capturedJsonResponse)))}`;
       }
 
       log(logLine);
@@ -120,5 +120,27 @@ function redactSensitiveData(value: unknown): unknown {
       key,
       sensitiveKeys.has(key) ? "[REDACTED]" : redactSensitiveData(entryValue),
     ]),
+  );
+}
+
+function compactLogPayload(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const preview = value.slice(0, 5).map((item) => compactLogPayload(item));
+    if (value.length > 5) {
+      preview.push({ __truncatedItems: value.length - 5 });
+    }
+    return preview;
+  }
+
+  if (typeof value === "string") {
+    return value.length > 200 ? `${value.slice(0, 200)}...` : value;
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => [key, compactLogPayload(entryValue)]),
   );
 }
