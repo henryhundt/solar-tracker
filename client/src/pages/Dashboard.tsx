@@ -1,7 +1,6 @@
 import { lazy, Suspense, useState } from "react";
 import { format, formatDistanceToNow, isToday, startOfDay, subDays } from "date-fns";
 import { Download, ExternalLink, LineChart, Sun, Zap } from "lucide-react";
-import type { DashboardLatestReading } from "@shared/schema";
 import { Layout } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -29,20 +28,14 @@ interface ChartDataPoint {
   energyKwh: number;
 }
 
-function formatEnergy(energyWh: number, fractionDigits = 1) {
-  return `${(energyWh / 1000).toFixed(fractionDigits)} kWh`;
+interface SiteDailyProduction {
+  date: Date;
+  label: string;
+  energyWh: number;
 }
 
-function formatPower(powerW?: number | null) {
-  if (!powerW || powerW <= 0) {
-    return "No live power";
-  }
-
-  if (powerW >= 1000) {
-    return `${(powerW / 1000).toFixed(1)} kW`;
-  }
-
-  return `${Math.round(powerW)} W`;
+function formatEnergy(energyWh: number, fractionDigits = 1) {
+  return `${(energyWh / 1000).toFixed(fractionDigits)} kWh`;
 }
 
 function parseSummaryDate(value: string) {
@@ -94,20 +87,29 @@ export default function Dashboard() {
     : dailyEnergy;
 
   const now = new Date();
+  const todayStart = startOfDay(now);
   const currentWindowStart = startOfDay(subDays(now, CURRENT_WINDOW_DAYS - 1));
   const previousWindowStart = startOfDay(subDays(currentWindowStart, CURRENT_WINDOW_DAYS));
 
-  const latestReadingBySite = new Map<number, DashboardLatestReading>(
-    (dashboardSummary?.latestReadings ?? []).map((reading) => [reading.siteId, reading])
-  );
-
   const chartBuckets = new Map<string, ChartDataPoint>();
+  const latestCompletedProductionBySite = new Map<number, SiteDailyProduction>();
   let currentTotalWh = 0;
   let previousTotalWh = 0;
   const reportingSiteIds = new Set<number>();
 
   for (const point of filteredDailyEnergy) {
     const readingDate = parseSummaryDate(point.date);
+
+    if (readingDate < todayStart) {
+      const previousPoint = latestCompletedProductionBySite.get(point.siteId);
+      if (!previousPoint || readingDate > previousPoint.date) {
+        latestCompletedProductionBySite.set(point.siteId, {
+          date: readingDate,
+          label: format(readingDate, "MMM d"),
+          energyWh: point.energyWh,
+        });
+      }
+    }
 
     if (readingDate >= currentWindowStart) {
       currentTotalWh += point.energyWh;
@@ -395,15 +397,9 @@ export default function Dashboard() {
 
             <div className="space-y-3 overflow-y-auto pr-1">
               {sites?.map((site) => {
-                const latestReading = latestReadingBySite.get(site.id);
                 const portalUrl = isUsableUrl(site.url) ? site.url : null;
                 const isSelected = selectedSiteId === site.id;
-                const readingDate = latestReading ? new Date(latestReading.timestamp) : null;
-                const latestReadingLabel = latestReading
-                  ? isToday(readingDate!)
-                    ? "Today"
-                    : format(readingDate!, "MMM d")
-                  : "Awaiting data";
+                const latestCompletedProduction = latestCompletedProductionBySite.get(site.id);
                 const syncLabel = site.lastSyncedAt
                   ? `Last synced ${formatDistanceToNow(new Date(site.lastSyncedAt), { addSuffix: true })}`
                   : "Never synced";
@@ -464,21 +460,18 @@ export default function Dashboard() {
                           )}
                         </div>
 
-                        <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="grid gap-2">
                           <div className="rounded-2xl border border-border/60 bg-card/90 px-3 py-2.5">
                             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                              {latestReadingLabel}
+                              Last Production Day
                             </p>
                             <p className="mt-1 text-sm font-semibold text-foreground">
-                              {latestReading ? formatEnergy(latestReading.energyWh, 2) : "No reading yet"}
+                              {latestCompletedProduction
+                                ? formatEnergy(latestCompletedProduction.energyWh, 2)
+                                : "No completed day yet"}
                             </p>
-                          </div>
-                          <div className="rounded-2xl border border-border/60 bg-card/90 px-3 py-2.5">
-                            <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                              Live Output
-                            </p>
-                            <p className="mt-1 text-sm font-semibold text-foreground">
-                              {formatPower(latestReading?.powerW)}
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {latestCompletedProduction?.label ?? "Run a sync to populate this total."}
                             </p>
                           </div>
                         </div>
