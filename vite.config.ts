@@ -37,10 +37,8 @@ export default defineConfig({
             return;
           }
 
-          if (id.includes("recharts")) {
-            return "charts";
-          }
-
+          // Let Vite place Recharts automatically. Forcing a shared charts
+          // vendor chunk caused the logged-out shell to preload a broken graph.
           if (
             id.includes("react-hook-form") ||
             id.includes("@hookform") ||
