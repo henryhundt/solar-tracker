@@ -1,5 +1,5 @@
 import type { Express, Request, RequestHandler } from "express";
-import session from "express-session";
+import session, { type Store } from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import createMemoryStore from "memorystore";
 import { timingSafeEqual } from "node:crypto";
@@ -48,7 +48,7 @@ function getAuthConfig(): AuthConfig {
   };
 }
 
-export function configureAuth(app: Express) {
+export async function configureAuth(app: Express): Promise<void> {
   const config = getAuthConfig();
 
   if (config.inProduction) {
@@ -56,7 +56,7 @@ export function configureAuth(app: Express) {
   }
 
   const MemoryStore = createMemoryStore(session);
-  const store = createSessionStore(config, MemoryStore);
+  const store = await createSessionStore(config, MemoryStore);
   app.use(
     session({
       name: "solar_tracker_session",
@@ -158,10 +158,10 @@ function safeCompare(input: string, expected: string): boolean {
   return timingSafeEqual(inputBuffer, expectedBuffer);
 }
 
-function createSessionStore(
+async function createSessionStore(
   config: AuthConfig,
   MemoryStore: ReturnType<typeof createMemoryStore>,
-) {
+): Promise<Store> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
 
   if (databaseUrl) {
@@ -177,9 +177,11 @@ function createSessionStore(
       console.error("Session store pool error:", error);
     });
 
+    await ensurePostgresSessionTable(pool);
+
     return new PGStore({
       pool,
-      createTableIfMissing: true,
+      createTableIfMissing: false,
       ttl: Math.ceil(config.sessionMaxAgeMs / 1000),
       pruneSessionInterval: 60 * 15,
     });
@@ -188,6 +190,20 @@ function createSessionStore(
   return new MemoryStore({
     checkPeriod: 24 * 60 * 60 * 1000,
   });
+}
+
+async function ensurePostgresSessionTable(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL COLLATE "default" PRIMARY KEY,
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire")
+  `);
 }
 
 function parseSessionMaxAgeMs(rawHours: string | undefined) {

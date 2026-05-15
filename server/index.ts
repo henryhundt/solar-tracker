@@ -7,8 +7,6 @@ import { configureAuth } from "./auth";
 const app = express();
 const httpServer = createServer(app);
 
-configureAuth(app);
-
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
@@ -63,6 +61,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await configureAuth(app);
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
