@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { Component, lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -7,10 +7,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Card, CardContent } from "@/components/ui/card";
 import { Activity, AlertCircle } from "lucide-react";
 import { authSessionQueryKey, useAuthSession } from "@/hooks/use-auth";
+import { Button } from "@/components/ui/button";
 
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Sites = lazy(() => import("@/pages/Sites"));
-const Login = lazy(() => import("@/pages/Login"));
+import Login from "@/pages/Login";
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 function FullScreenLoader({
@@ -33,6 +34,58 @@ function FullScreenLoader({
       </div>
     </div>
   );
+}
+
+class AppErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = {
+    error: null as Error | null,
+  };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("App render error:", error);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-background px-4">
+          <Card className="w-full max-w-lg rounded-2xl shadow-xl">
+            <CardContent className="space-y-5 pt-6 text-center">
+              <div className="flex justify-center">
+                <AlertCircle className="h-12 w-12 text-destructive" />
+              </div>
+              <div className="space-y-2">
+                <h1 className="text-2xl font-display font-bold text-foreground">
+                  Something went wrong loading the app
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  {this.state.error.message || "An unexpected client error occurred."}
+                </p>
+              </div>
+              <div className="flex justify-center">
+                <Button
+                  type="button"
+                  className="rounded-xl"
+                  onClick={() => window.location.reload()}
+                >
+                  Reload App
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
 }
 
 function Router() {
@@ -102,18 +155,7 @@ function AuthGate() {
   }
 
   if (authSession.data?.authEnabled && !authSession.data.authenticated) {
-    return (
-      <Suspense
-        fallback={(
-          <FullScreenLoader
-            title="Loading sign-in..."
-            subtitle="Preparing secure access to the app."
-          />
-        )}
-      >
-        <Login />
-      </Suspense>
-    );
+    return <Login />;
   }
 
   return <Router />;
@@ -124,7 +166,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <AuthGate />
+        <AppErrorBoundary>
+          <AuthGate />
+        </AppErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>
   );
