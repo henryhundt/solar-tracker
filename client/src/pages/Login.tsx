@@ -39,18 +39,18 @@ export default function Login() {
 
             <div className="max-w-xl space-y-5">
               <h1 className="text-5xl font-display font-bold leading-none text-foreground sm:text-6xl">
-                Keep your solar monitoring dashboard private.
+                SOLAR MONITORING DASHBOARD
               </h1>
               <p className="text-base leading-7 text-muted-foreground sm:text-lg">
-                This app can store portal credentials and trigger live sync jobs, so the hosted version now requires an admin sign-in before anyone can view or manage sites.
+                This app can track solar across inverter portals with or without API services and provide central location for system historical generation data.
               </p>
             </div>
 
             <div className="mt-10 grid gap-4 sm:grid-cols-3">
               {[
-                "Protected site management",
-                "Sanitized API responses",
-                "Safer hosted deployments",
+                "inverter and API agnostic",
+                "auto and on demand syncing",
+                "trend and historical data ready for download",
               ].map((item) => (
                 <div key={item} className="rounded-md border border-primary/10 bg-white/80 px-4 py-4 text-sm font-medium text-foreground shadow-sm backdrop-blur">
                   {item}
