@@ -70,7 +70,7 @@ This is the closest thing to fully free for personal use, but it has tradeoffs.
 - `render.yaml` for a free Render web service
 - `/api/internal/sync-all` protected by `CRON_SECRET`
 
-Note: the GitHub Actions workflow for this legacy free-hosting path has been removed from the repo because the current recommended deployment target is Railway. If you intentionally go back to Render free hosting, recreate a scheduled workflow that POSTs to `/api/internal/sync-all` using `APP_URL` and `CRON_SECRET`.
+The included `Daily Full Site Sync` GitHub Actions workflow POSTs to `/api/internal/sync-all` using `APP_URL` and `CRON_SECRET`.
 
 ### Steps
 
@@ -93,11 +93,12 @@ Note: the GitHub Actions workflow for this legacy free-hosting path has been rem
    ```
 
 8. Keep `ENABLE_INTERNAL_SCHEDULER=false` on Render so only GitHub Actions triggers the daily sync.
+9. Confirm the `Daily Full Site Sync` workflow is enabled in GitHub Actions. It runs at about 1:15 AM Central and can also be started manually with `workflow_dispatch`.
 
 ### Tradeoffs
 
 - Render free web services sleep when idle, so the first request can be slow.
-- The GitHub Actions schedule runs in UTC, so the local Central Time trigger shifts during daylight saving time.
+- GitHub Actions schedules run in UTC, so this repo schedules both daylight and standard UTC windows and only calls the app when the runner's `America/Chicago` hour is 1 AM.
 - This is fine for a hobby dashboard, but not what I would use for business-critical monitoring.
 
 ### Docs

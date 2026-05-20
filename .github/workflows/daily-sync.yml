@@ -1,0 +1,54 @@
+name: Daily Full Site Sync
+
+on:
+  schedule:
+    # 1:15 AM Central with daylight-saving coverage:
+    # - 06:15 UTC is 1:15 AM CDT
+    # - 07:15 UTC is 1:15 AM CST
+    - cron: "15 6 * * *"
+    - cron: "15 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync-all-sites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check Central Time
+        id: central_time
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "should_run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          central_hour="$(TZ=America/Chicago date +%H)"
+          if [[ "${central_hour}" == "01" ]]; then
+            echo "should_run=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "should_run=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Trigger full site sync
+        if: steps.central_time.outputs.should_run == 'true'
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        shell: bash
+        run: |
+          if [[ -z "${APP_URL}" ]]; then
+            echo "APP_URL repository secret is required."
+            exit 1
+          fi
+
+          if [[ -z "${CRON_SECRET}" ]]; then
+            echo "CRON_SECRET repository secret is required."
+            exit 1
+          fi
+
+          curl --fail --show-error --silent --max-time 60 \
+            --request POST \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL%/}/api/internal/sync-all"
