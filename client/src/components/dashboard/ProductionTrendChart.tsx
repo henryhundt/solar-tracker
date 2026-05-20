@@ -21,13 +21,18 @@ interface ProductionTrendChartProps {
   reportingSiteCount: number;
 }
 
+const kwhFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+  minimumFractionDigits: 1,
+});
+
 export function ProductionTrendChart({
   chartData,
   currentWindowDays,
   reportingSiteCount,
 }: ProductionTrendChartProps) {
   return (
-    <section className="rounded-[2rem] border border-border/60 bg-card/95 p-5 shadow-sm shadow-slate-950/5 md:p-6">
+    <section className="rounded-[1.5rem] border border-border/60 bg-card/95 p-5 shadow-sm shadow-slate-950/5 md:p-6">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-bold text-foreground">Production Trend</h3>
@@ -53,11 +58,11 @@ export function ProductionTrendChart({
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 12, right: 10, left: -18, bottom: 0 }}>
+            <AreaChart data={chartData} margin={{ top: 12, right: 10, left: -4, bottom: 0 }}>
               <defs>
                 <linearGradient id="colorEnergy" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.28} />
-                  <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.03} />
+                  <stop offset="5%" stopColor="hsl(var(--chart-1))" stopOpacity={0.28} />
+                  <stop offset="95%" stopColor="hsl(var(--chart-1))" stopOpacity={0.03} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
@@ -71,12 +76,12 @@ export function ProductionTrendChart({
               <YAxis
                 axisLine={false}
                 tickLine={false}
-                width={44}
+                width={64}
                 tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
-                tickFormatter={(value: number) => (value >= 1000 ? `${(value / 1000).toFixed(1)}k` : `${value}`)}
+                tickFormatter={(value: number) => kwhFormatter.format(value)}
               />
               <Tooltip
-                formatter={(value: number) => [`${Number(value).toFixed(1)} kWh`, "Energy"]}
+                formatter={(value: number) => [`${kwhFormatter.format(Number(value))} kWh`, "Energy"]}
                 labelFormatter={(_, payload) => payload?.[0]?.payload?.fullLabel ?? ""}
                 contentStyle={{
                   borderRadius: "16px",
@@ -88,11 +93,11 @@ export function ProductionTrendChart({
               <Area
                 type="monotone"
                 dataKey="energyKwh"
-                stroke="hsl(var(--primary))"
+                stroke="hsl(var(--chart-1))"
                 strokeWidth={3}
                 fillOpacity={1}
                 fill="url(#colorEnergy)"
-                activeDot={{ r: 4, fill: "hsl(var(--primary))", strokeWidth: 0 }}
+                activeDot={{ r: 4, fill: "hsl(var(--chart-1))", strokeWidth: 0 }}
               />
             </AreaChart>
           </ResponsiveContainer>

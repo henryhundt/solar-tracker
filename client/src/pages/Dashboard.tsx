@@ -35,7 +35,13 @@ interface SiteDailyProduction {
 }
 
 function formatEnergy(energyWh: number, fractionDigits = 1) {
-  return `${(energyWh / 1000).toFixed(fractionDigits)} kWh`;
+  const value = energyWh / 1000;
+  const formattedValue = new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(value);
+
+  return `${formattedValue} kWh`;
 }
 
 function parseSummaryDate(value: string) {
@@ -221,10 +227,11 @@ export default function Dashboard() {
   return (
     <Layout>
       <div className="space-y-6 md:space-y-8">
-        <section className="rounded-[2rem] border border-border/60 bg-card/80 p-5 shadow-sm shadow-slate-950/5 backdrop-blur-sm md:p-7">
+        <section className="relative overflow-hidden rounded-[1.5rem] border border-primary/20 bg-card/90 p-5 shadow-sm shadow-slate-950/5 backdrop-blur-sm md:p-7">
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-[#34657f] via-[#b7dd79] to-[#fdb71a]" />
           <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
             <div className="space-y-4">
-              <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-primary">
+              <div className="inline-flex items-center gap-2 rounded-md border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-primary">
                 {selectedSite ? "Focused View" : "Portfolio Overview"}
               </div>
 
@@ -347,7 +354,7 @@ export default function Dashboard() {
             <StatCard
               title="30-Day Production"
               value={formatEnergy(currentTotalWh)}
-              icon={<Zap className="h-5 w-5 text-amber-500" />}
+              icon={<Zap className="h-5 w-5 text-[#fdb71a]" />}
               trend={
                 trendPercent === null
                   ? undefined
@@ -366,7 +373,7 @@ export default function Dashboard() {
             <StatCard
               title="Average Reporting Day"
               value={chartData.length > 0 ? formatEnergy(averageDailyWh) : "No data"}
-              icon={<LineChart className="h-5 w-5 text-sky-500" />}
+              icon={<LineChart className="h-5 w-5 text-primary" />}
               description={
                 chartData.length > 0
                   ? `${chartData.length} day${chartData.length === 1 ? "" : "s"} with readings in the last 30 days.`
@@ -379,7 +386,7 @@ export default function Dashboard() {
             <StatCard
               title="Peak Production Day"
               value={bestDay ? formatEnergy(bestDay.energyWh) : "No data"}
-              icon={<Sun className="h-5 w-5 text-orange-500" />}
+              icon={<Sun className="h-5 w-5 text-[#b7dd79]" />}
               description={
                 bestDay
                   ? `${bestDay.fullLabel} was the strongest production day in view.`
@@ -411,7 +418,7 @@ export default function Dashboard() {
             />
           </Suspense>
 
-          <section className="flex flex-col rounded-[2rem] border border-border/60 bg-card/95 p-5 shadow-sm shadow-slate-950/5 md:p-6">
+          <section className="flex flex-col rounded-[1.5rem] border border-border/60 bg-card/95 p-5 shadow-sm shadow-slate-950/5 md:p-6">
             <div className="mb-5 flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-lg font-bold text-foreground">Site Health</h3>
@@ -450,7 +457,7 @@ export default function Dashboard() {
                     role="button"
                     tabIndex={0}
                     className={cn(
-                      "rounded-[1.5rem] border p-4 transition-all focus:outline-none focus:ring-2 focus:ring-primary/20",
+                      "rounded-[1rem] border p-4 transition-all focus:outline-none focus:ring-2 focus:ring-primary/20",
                       isSelected
                         ? "border-primary/30 bg-primary/10 shadow-sm shadow-primary/10"
                         : "border-border/70 bg-background/70 hover:border-primary/20 hover:bg-background"
@@ -463,7 +470,7 @@ export default function Dashboard() {
                           "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-bold",
                           isSelected
                             ? "bg-primary text-primary-foreground"
-                            : "bg-orange-100 text-orange-700"
+                            : "bg-secondary text-secondary-foreground"
                         )}
                       >
                         {site.name.charAt(0).toUpperCase()}

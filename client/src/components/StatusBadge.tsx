@@ -12,13 +12,13 @@ export function StatusBadge({ status, lastError, lastSyncedAt }: StatusBadgeProp
   const config = {
     fresh: {
       label: "Synced",
-      className: "border-emerald-200 bg-emerald-50/90 text-emerald-700",
-      dotClass: "bg-emerald-500",
+      className: "border-[#b7dd79]/70 bg-[#b7dd79]/20 text-primary",
+      dotClass: "bg-[#b7dd79]",
     },
     scraping: {
       label: "Syncing",
-      className: "border-amber-200 bg-amber-50/90 text-amber-700",
-      dotClass: "bg-amber-500 animate-pulse",
+      className: "border-[#fdb71a]/50 bg-[#fdb71a]/15 text-primary",
+      dotClass: "bg-[#fdb71a] animate-pulse",
     },
     error: {
       label: "Needs attention",
@@ -27,8 +27,8 @@ export function StatusBadge({ status, lastError, lastSyncedAt }: StatusBadgeProp
     },
     stale: {
       label: "Stale data",
-      className: "border-amber-200 bg-amber-50/90 text-amber-700",
-      dotClass: "bg-amber-500",
+      className: "border-[#fdb71a]/50 bg-[#fdb71a]/15 text-primary",
+      dotClass: "bg-[#fdb71a]",
     },
     never: {
       label: "Not synced",
