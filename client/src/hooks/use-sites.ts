@@ -1,11 +1,61 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { type InsertSite, type PublicSite, type UpdateSiteRequest } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, throwIfResNotOk } from "@/lib/queryClient";
+import { SYNC_POLL_INTERVAL_MS } from "@/lib/sync-refresh";
 
 interface UseSitesOptions {
   includeArchived?: boolean;
+}
+
+function markSiteAsScraping(site: PublicSite): PublicSite {
+  return {
+    ...site,
+    status: "scraping",
+    lastError: null,
+  };
+}
+
+function updateCachedSiteLists(
+  queryClient: QueryClient,
+  updateSite: (site: PublicSite) => PublicSite
+) {
+  queryClient.setQueriesData<PublicSite[]>(
+    { queryKey: [api.sites.list.path] },
+    (sites) => Array.isArray(sites) ? sites.map(updateSite) : sites
+  );
+}
+
+function markCachedSiteAsScraping(queryClient: QueryClient, siteId: number) {
+  updateCachedSiteLists(queryClient, (site) => (
+    site.id === siteId ? markSiteAsScraping(site) : site
+  ));
+
+  queryClient.setQueryData<PublicSite | null>(
+    [api.sites.get.path, siteId],
+    (site) => site ? markSiteAsScraping(site) : site
+  );
+}
+
+function markCachedActiveSitesAsScraping(queryClient: QueryClient) {
+  updateCachedSiteLists(queryClient, (site) => (
+    site.archivedAt ? site : markSiteAsScraping(site)
+  ));
+}
+
+function invalidateSiteQueries(queryClient: QueryClient, siteId?: number) {
+  queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
+  invalidateReadingQueries(queryClient);
+
+  if (siteId != null) {
+    queryClient.invalidateQueries({ queryKey: [api.sites.get.path, siteId] });
+  }
+}
+
+function invalidateReadingQueries(queryClient: QueryClient) {
+  queryClient.invalidateQueries({ queryKey: [api.readings.summary.path] });
+  queryClient.invalidateQueries({ queryKey: [api.readings.list.path] });
 }
 
 export function useSites(options: UseSitesOptions = {}) {
@@ -25,7 +75,7 @@ export function useSites(options: UseSitesOptions = {}) {
     },
     refetchInterval: (query) => {
       const sites = query.state.data;
-      return Array.isArray(sites) && sites.some((site) => site.status === "scraping") ? 3000 : false;
+      return Array.isArray(sites) && sites.some((site) => site.status === "scraping") ? SYNC_POLL_INTERVAL_MS : false;
     },
     refetchIntervalInBackground: true,
   });
@@ -57,7 +107,7 @@ export function useCreateSite() {
       return api.sites.create.responses[201].parse(await res.json());
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
+      invalidateSiteQueries(queryClient);
       toast({ title: "Success", description: "Site added successfully" });
     },
     onError: (error) => {
@@ -81,8 +131,7 @@ export function useUpdateSite() {
       return api.sites.update.responses[200].parse(await res.json());
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.sites.get.path, data.id] });
+      invalidateSiteQueries(queryClient, data.id);
       toast({ title: "Updated", description: "Site updated successfully" });
     },
   });
@@ -97,9 +146,8 @@ export function useDeleteSite() {
       const url = buildUrl(api.sites.delete.path, { id });
       await apiRequest("DELETE", url);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.readings.list.path] });
+    onSuccess: (_, id) => {
+      invalidateSiteQueries(queryClient, id);
       toast({ title: "Deleted", description: "Site and historical data deleted permanently." });
     },
     onError: (error) => {
@@ -122,9 +170,8 @@ export function useArchiveSite() {
       const res = await apiRequest("POST", url);
       return api.sites.archive.responses[200].parse(await res.json());
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.readings.list.path] });
+    onSuccess: (site) => {
+      invalidateSiteQueries(queryClient, site.id);
       toast({ title: "Archived", description: "Site archived and its history was preserved." });
     },
     onError: (error) => {
@@ -147,9 +194,8 @@ export function useRestoreSite() {
       const res = await apiRequest("POST", url);
       return api.sites.restore.responses[200].parse(await res.json());
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.readings.list.path] });
+    onSuccess: (site) => {
+      invalidateSiteQueries(queryClient, site.id);
       toast({ title: "Restored", description: "Site moved back into the active sync list." });
     },
     onError: (error) => {
@@ -167,18 +213,20 @@ export function useScrapeSite() {
   const { toast } = useToast();
 
   return useMutation({
+    onMutate: (id) => {
+      markCachedSiteAsScraping(queryClient, id);
+    },
     mutationFn: async (id: number) => {
       const url = buildUrl(api.sites.scrape.path, { id });
       const res = await apiRequest("POST", url);
-      return res.json();
+      return api.sites.scrape.responses[202].parse(await res.json());
     },
-    onSuccess: (_, id) => {
-      queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
-      // Invalidate readings as well since scraping adds new data
-      queryClient.invalidateQueries({ queryKey: [api.readings.list.path] });
-      toast({ title: "Sync Complete", description: "Latest readings were saved successfully." });
+    onSuccess: () => {
+      invalidateReadingQueries(queryClient);
+      toast({ title: "Sync Started", description: "This site is syncing in the background." });
     },
-    onError: (error) => {
+    onError: (error, id) => {
+      invalidateSiteQueries(queryClient, id);
       toast({ 
         title: "Sync Failed", 
         description: error.message, 
@@ -193,17 +241,19 @@ export function useSyncAllSites() {
   const { toast } = useToast();
 
   return useMutation({
+    onMutate: () => {
+      markCachedActiveSitesAsScraping(queryClient);
+    },
     mutationFn: async () => {
       const res = await apiRequest("POST", api.sites.syncAll.path);
       return api.sites.syncAll.responses[202].parse(await res.json());
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.sites.list.path] });
-      queryClient.invalidateQueries({ queryKey: [api.readings.summary.path] });
-      queryClient.invalidateQueries({ queryKey: [api.readings.list.path] });
+      invalidateReadingQueries(queryClient);
       toast({ title: "Sync Started", description: "All active sites are syncing in the background." });
     },
     onError: (error) => {
+      invalidateSiteQueries(queryClient);
       toast({
         title: "Sync Failed",
         description: error.message,

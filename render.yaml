@@ -17,12 +17,18 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        sync: false
       - key: SEED_ON_BOOT
         value: "false"
       - key: ENABLE_INTERNAL_SCHEDULER
         value: "false"
       - key: SYNC_TIMEZONE
         value: America/Chicago
+      - key: PROVIDER_HTTP_TIMEOUT_MS
+        value: "30000"
+      - key: SHUTDOWN_GRACE_MS
+        value: "30000"
       - key: DATABASE_URL
         sync: false
       - key: CRON_SECRET

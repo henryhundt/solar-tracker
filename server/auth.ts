@@ -2,9 +2,10 @@ import type { Express, Request, RequestHandler } from "express";
 import session, { type Store } from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import createMemoryStore from "memorystore";
-import { timingSafeEqual } from "node:crypto";
-import { Pool } from "pg";
+import { createHash, timingSafeEqual } from "node:crypto";
+import type { Pool } from "pg";
 import type { AuthSessionResponse } from "@shared/schema";
+import { pool as databasePool } from "./db";
 
 declare module "express-session" {
   interface SessionData {
@@ -115,21 +116,29 @@ export function authenticateAdmin(username: string, password: string): boolean {
     return false;
   }
 
-  return safeCompare(username, config.adminUsername) && safeCompare(password, config.adminPassword);
+  const usernameMatches = safeCompare(username, config.adminUsername);
+  const passwordMatches = safeCompare(password, config.adminPassword);
+  return usernameMatches && passwordMatches;
 }
 
 export function saveAuthenticatedSession(req: Request): Promise<void> {
-  req.session.isAuthenticated = true;
-  req.session.adminUsername = getAuthConfig().adminUsername;
-
   return new Promise((resolve, reject) => {
-    req.session.save((error) => {
-      if (error) {
-        reject(error);
+    req.session.regenerate((regenerateError) => {
+      if (regenerateError) {
+        reject(regenerateError);
         return;
       }
 
-      resolve();
+      req.session.isAuthenticated = true;
+      req.session.adminUsername = getAuthConfig().adminUsername;
+      req.session.save((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve();
+      });
     });
   });
 }
@@ -148,12 +157,8 @@ export function destroyAuthenticatedSession(req: Request): Promise<void> {
 }
 
 function safeCompare(input: string, expected: string): boolean {
-  const inputBuffer = Buffer.from(input);
-  const expectedBuffer = Buffer.from(expected);
-
-  if (inputBuffer.length !== expectedBuffer.length) {
-    return false;
-  }
+  const inputBuffer = createHash("sha256").update(input).digest();
+  const expectedBuffer = createHash("sha256").update(expected).digest();
 
   return timingSafeEqual(inputBuffer, expectedBuffer);
 }
@@ -166,21 +171,14 @@ async function createSessionStore(
 
   if (databaseUrl) {
     const PGStore = connectPgSimple(session);
-    const pool = new Pool({
-      connectionString: databaseUrl,
-      ssl: databaseUrl.includes("sslmode=require")
-        ? { rejectUnauthorized: false }
-        : undefined,
-    });
-
-    pool.on("error", (error) => {
+    databasePool.on("error", (error) => {
       console.error("Session store pool error:", error);
     });
 
-    await ensurePostgresSessionTable(pool);
+    await ensurePostgresSessionTable(databasePool);
 
     return new PGStore({
-      pool,
+      pool: databasePool,
       createTableIfMissing: false,
       ttl: Math.ceil(config.sessionMaxAgeMs / 1000),
       pruneSessionInterval: 60 * 15,

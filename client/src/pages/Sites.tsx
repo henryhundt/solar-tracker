@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { format, formatDistanceToNow } from "date-fns";
 import {
   AlertCircle,
@@ -271,6 +271,7 @@ export default function Sites() {
   const deleteMutation = useDeleteSite();
   const restoreMutation = useRestoreSite();
   const scrapeMutation = useScrapeSite();
+  const syncClickLocksRef = useRef(new Set<number>());
 
   const buildExportUrl = (siteId?: number) => {
     const url = new URL("/api/readings/export", window.location.origin);
@@ -287,6 +288,30 @@ export default function Sites() {
   const sitesNeedingAttention = activeSites.filter((site) => siteNeedsReview(site, now)).length;
   const staleSitesCount = activeSites.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "stale").length;
   const unsyncedSitesCount = activeSites.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "never").length;
+
+  const handleSyncSite = (siteId: number, isBlocked: boolean) => {
+    if (isBlocked || syncClickLocksRef.current.has(siteId)) {
+      return;
+    }
+
+    syncClickLocksRef.current.add(siteId);
+    scrapeMutation.mutate(siteId, {
+      onError: () => {
+        syncClickLocksRef.current.delete(siteId);
+      },
+    });
+  };
+
+  useEffect(() => {
+    for (const siteId of Array.from(syncClickLocksRef.current)) {
+      const site = activeSites.find((activeSite) => activeSite.id === siteId);
+      const isStarting = scrapeMutation.isPending && scrapeMutation.variables === siteId;
+
+      if (!isStarting && site?.status !== "scraping") {
+        syncClickLocksRef.current.delete(siteId);
+      }
+    }
+  }, [activeSites, scrapeMutation.isPending, scrapeMutation.variables]);
 
   if (isLoading) {
     return (
@@ -414,7 +439,7 @@ export default function Sites() {
                         <Button
                           variant="secondary"
                           className="w-full rounded-xl"
-                          onClick={() => scrapeMutation.mutate(site.id)}
+                          onClick={() => handleSyncSite(site.id, isSyncing || isArchiving || isDeleting)}
                           disabled={isSyncing || isArchiving || isDeleting}
                         >
                           <RefreshCw className={`h-4 w-4 ${isSyncing ? "animate-spin" : ""}`} />

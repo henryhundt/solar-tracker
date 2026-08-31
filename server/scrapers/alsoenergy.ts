@@ -1,6 +1,7 @@
 import { getAlsoEnergyApiSiteId } from "@shared/alsoenergy";
 import type { Site } from "@shared/schema";
 import type { HistoryWindow } from "../history";
+import { fetchWithTimeout } from "../provider-http";
 
 interface AlsoEnergyReading {
   siteId: number;
@@ -103,7 +104,7 @@ export async function authenticateAlsoEnergy(
   body.append("username", username);
   body.append("password", password);
 
-  const response = await fetch(`${apiBase}/Auth/token`, {
+  const response = await fetchWithTimeout(`${apiBase}/Auth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
@@ -127,7 +128,7 @@ export async function discoverAlsoEnergySites(
   const { accessToken, baseUrl: apiBase } = await authenticateAlsoEnergy(username, password, baseUrl);
 
   console.log(`[AlsoEnergy] Fetching site list...`);
-  const response = await fetch(`${apiBase}/Sites`, {
+  const response = await fetchWithTimeout(`${apiBase}/Sites`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
@@ -277,7 +278,7 @@ async function fetchSiteDetail(
   accessToken: string,
   alsoSiteId: number
 ): Promise<AlsoEnergySiteDetail> {
-  const response = await fetch(`${baseUrl}/Sites/${alsoSiteId}`, {
+  const response = await fetchWithTimeout(`${baseUrl}/Sites/${alsoSiteId}`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
@@ -297,7 +298,7 @@ async function fetchHardwareSnapshot(
   accessToken: string,
   alsoSiteId: number
 ): Promise<AlsoEnergyHardwareListResult> {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${baseUrl}/Sites/${alsoSiteId}/Hardware?includeArchivedFields=true&includeSummaryFields=true`,
     {
       headers: {
@@ -333,7 +334,7 @@ async function fetchBinData(
     `binSizes=Bin1Hour&` +
     `tz=${encodeURIComponent(siteTimeZone)}`;
 
-  const response = await fetch(binDataUrl, {
+  const response = await fetchWithTimeout(binDataUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,

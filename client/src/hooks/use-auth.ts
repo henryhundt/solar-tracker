@@ -39,9 +39,14 @@ export function useLogout() {
       const res = await apiRequest("POST", api.auth.logout.path);
       return api.auth.logout.responses[200].parse(await res.json());
     },
-    onSuccess: (session) => {
-      queryClient.clear();
+    onSuccess: async (session) => {
+      await queryClient.cancelQueries({
+        predicate: (query) => query.queryKey[0] !== authSessionQueryKey[0],
+      });
       queryClient.setQueryData(authSessionQueryKey, session);
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] !== authSessionQueryKey[0],
+      });
     },
   });
 }

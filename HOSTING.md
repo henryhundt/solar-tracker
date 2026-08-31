@@ -1,113 +1,76 @@
-# Hosting Guide
+# Hosting and Operations
 
-This app is not a good fit for static hosting or most serverless platforms because it needs:
+This app needs a container host, PostgreSQL, Chromium, and a scheduler that can run a terminating command. Static and conventional serverless hosting are poor fits for the Playwright scrapers.
 
-- a long-running Node server
-- PostgreSQL
-- Chromium for the Playwright-based scrapers
-- a reliable daily sync job
+## Recommended production shape: Railway + managed PostgreSQL
 
-## Recommended: Railway + Neon
+Use two Railway services from this repository:
 
-This is the best low-cost production setup for this codebase.
+1. **Web service** — uses the Dockerfile and its default `npm start` command.
+2. **Cron service** — uses the same repository and Dockerfile, overrides the start command to `npm run sync:all`, and sets the cron schedule to `15 6 * * *` (06:15 UTC daily).
 
-Estimated cost as of 2026-03-26:
+Railway schedules cron in UTC. The recommended schedule runs at 1:15 AM during Central daylight time and 12:15 AM during Central standard time. If an exact local clock time matters more than isolating the job from the web process, omit the cron service and set `ENABLE_INTERNAL_SCHEDULER=true` on exactly one web replica instead.
 
-- Railway Hobby: about $5/month, with usage billed against that included amount first
-- Neon Free Postgres: $0/month for hobby use
+Do not enable both scheduling methods. Database leases prevent concurrent full-sync runs, but two schedules could still run one after the other.
 
-### Why this is the best fit
+### Required web-service settings
 
-- The app stays awake, so the built-in scheduler can run normally.
-- The included `Dockerfile` already packages Chromium for Playwright.
-- You only pay for one app container if usage stays small.
-- You do not need a separate GitHub Actions cron job on this path.
+Set the health check path to `/healthz` and configure:
 
-### Steps
+```text
+DATABASE_URL=your-managed-postgres-connection-string
+NODE_ENV=production
+ADMIN_USERNAME=your-admin-login
+ADMIN_PASSWORD=choose-a-strong-unique-password
+SESSION_SECRET=generate-a-long-random-secret
+CREDENTIAL_ENCRYPTION_KEY=generate-32-random-bytes-as-base64
+SESSION_MAX_AGE_HOURS=168
+SEED_ON_BOOT=false
+ENABLE_INTERNAL_SCHEDULER=false
+PROVIDER_HTTP_TIMEOUT_MS=30000
+SHUTDOWN_GRACE_MS=30000
+```
 
-1. Create a free PostgreSQL database in Neon and copy its connection string.
-2. Run the schema push once from your machine:
+Generate the encryption key once with `openssl rand -base64 32`, store it as a Railway secret, and back it up in a password manager. Changing or losing it makes directly stored provider credentials unreadable. Prefer `{KEY}_USERNAME`, `{KEY}_PASSWORD`, `{KEY}_URL`, and `{KEY}_API_KEY` environment variables when practical.
 
-   ```bash
-   DATABASE_URL="your-neon-connection-string" npm run db:push
-   ```
+Set Railway’s pre-deploy command for the web service to `npm run migrate`. The start command also runs the idempotent migration check, so a missing pre-deploy setting is safe; the explicit setting prevents a bad migration from reaching the deployment phase.
 
-3. Push this repo to GitHub.
-4. In Railway, create a new service from the repo. Railway will detect the root `Dockerfile`.
-5. Add these environment variables in Railway:
+The cron service needs the same `DATABASE_URL`, `CREDENTIAL_ENCRYPTION_KEY`, and provider credential variables. It does not need the admin login or session secret because it never starts the web server.
 
-   ```bash
-   DATABASE_URL=your-neon-connection-string
-   NODE_ENV=production
-   ADMIN_USERNAME=your-admin-login
-   ADMIN_PASSWORD=choose-a-strong-password
-   SESSION_SECRET=generate-a-long-random-secret
-   SESSION_MAX_AGE_HOURS=168
-   SEED_ON_BOOT=false
-   ENABLE_INTERNAL_SCHEDULER=true
-   SYNC_TIMEZONE=America/Chicago
-   ```
+Official references: [Railway cron jobs](https://docs.railway.com/cron-jobs), [Railway pre-deploy commands](https://docs.railway.com/deployments/pre-deploy-command), and [Railway Dockerfiles](https://docs.railway.com/reference/dockerfiles).
 
-6. Set the health check path to `/healthz`.
-7. Deploy.
-8. Do not keep the old `Free Daily Sync` GitHub Action enabled for Railway. Railway should run the sync internally with `ENABLE_INTERNAL_SCHEDULER=true`.
+## Rollout order
 
-### Notes
+1. Back up PostgreSQL and confirm the restore procedure.
+2. Add `CREDENTIAL_ENCRYPTION_KEY` and the other required production variables before deploying this version.
+3. Open a pull request from `codex/production-hardening`; require the `CI / validate` check and review the migration.
+4. Deploy to a staging Railway environment against a disposable database. Confirm migrations, login, site editing, one individual sync, CSV export, and `/healthz`.
+5. Merge the reviewed commit and deploy the web service. Startup converts existing direct credentials to AES-256-GCM ciphertext in one transaction.
+6. Add the Railway cron service with `npm run sync:all`, then verify one manual cron execution exits successfully and reports per-site totals.
+7. Confirm `ENABLE_INTERNAL_SCHEDULER=false` on the web service and leave the GitHub workflow as manual fallback only.
+8. Protect `main`: require pull requests, one approval, `CI / validate`, resolved conversations, and disallow force pushes/deletions. Keep Railway production deploys tied to `main` only.
 
-- If you store scraper credentials in environment variables, add them in Railway using the `{KEY}_USERNAME`, `{KEY}_PASSWORD`, `{KEY}_URL`, and `{KEY}_API_KEY` pattern.
-- The hosted app now requires an admin sign-in. `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SESSION_SECRET` must be present in production or the server will refuse to start.
-- Sessions now use PostgreSQL-backed storage when `DATABASE_URL` is present, so logins survive normal app restarts and deploys. `SESSION_MAX_AGE_HOURS` controls the rolling session window and defaults to 168 hours.
-- Railway Docker docs: https://docs.railway.com/reference/dockerfiles
-- Railway billing docs: https://docs.railway.com/pricing/understanding-your-bill
-- Neon pricing: https://neon.com/pricing
+## Operations
 
-## Free Hobby Setup: Render + Neon + GitHub Actions
+- A full sync uses a PostgreSQL lease, so only one process can own it at a time.
+- The standalone sync exits nonzero when any site fails or is skipped. Configure Railway failure notifications for the cron service.
+- `/api/internal/sync-all` waits for completion and returns a failing HTTP status for partial failure. It remains available for the manual GitHub fallback and requires `CRON_SECRET`.
+- `/healthz` checks PostgreSQL as well as the web process.
+- `SIGTERM` stops new connections and gives tracked sync work up to `SHUTDOWN_GRACE_MS` to finish.
+- Inspect `last_error`, `last_synced_at`, and cron logs after every failed run. Do not repeatedly retry a provider that is rejecting credentials or rate-limiting requests.
 
-This is the closest thing to fully free for personal use, but it has tradeoffs.
+## GitHub Actions fallback
 
-### What is included in this repo
+`.github/workflows/daily-sync.yml` is intentionally manual-only. Public-repository scheduled workflows can be delayed and are automatically disabled after 60 days without repository activity. For a manual run, configure `SOLAR_TRACKER_SYNC_URL` (or legacy `APP_URL`) and `CRON_SECRET` as repository secrets.
 
-- `render.yaml` for a free Render web service
-- `/api/internal/sync-all` protected by `CRON_SECRET`
+Reference: [GitHub scheduled workflow behavior](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
-The included `Daily Full Site Sync` GitHub Actions workflow POSTs to `/api/internal/sync-all` using `APP_URL` and `CRON_SECRET`.
+## Render fallback
 
-### Steps
+Render can run the Docker web service, but its Free tier is only appropriate for previews or low-stakes hobby use: free web services spin down after 15 idle minutes, may restart, and do not support free cron jobs. A paid Render web service plus a paid cron job is viable; use `npm run sync:all` for the cron command and keep the internal scheduler disabled.
 
-1. Create a free PostgreSQL database in Neon.
-2. Run the schema push once from your machine:
+Reference: [Render Free limitations](https://render.com/docs/free) and [Render service types](https://render.com/docs/your-first-deploy).
 
-   ```bash
-   DATABASE_URL="your-neon-connection-string" npm run db:push
-   ```
+## Why not Vercel or Netlify?
 
-3. Push the repo to GitHub.
-4. In Render, create a Blueprint from this repo so it uses `render.yaml`.
-5. When Render asks for `DATABASE_URL`, paste your Neon connection string.
-6. Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` for the app login, and keep the generated `SESSION_SECRET`.
-7. After deploy, copy your app URL, then add these GitHub repository secrets:
-
-   ```bash
-   APP_URL=https://your-app.onrender.com
-   CRON_SECRET=the-same-generated-secret-from-render
-   ```
-
-8. Keep `ENABLE_INTERNAL_SCHEDULER=false` on Render so only GitHub Actions triggers the daily sync.
-9. Confirm the `Daily Full Site Sync` workflow is enabled in GitHub Actions. It runs at about 1:15 AM Central and can also be started manually with `workflow_dispatch`.
-
-### Tradeoffs
-
-- Render free web services sleep when idle, so the first request can be slow.
-- GitHub Actions schedules run in UTC, so this repo schedules both daylight and standard UTC windows and only calls the app when the runner's `America/Chicago` hour is 1 AM.
-- This is fine for a hobby dashboard, but not what I would use for business-critical monitoring.
-
-### Docs
-
-- Render Docker docs: https://render.com/docs/docker
-- Render Blueprint reference: https://render.com/docs/blueprint-spec
-- Render pricing: https://render.com/pricing/
-- GitHub Actions scheduled workflows: https://docs.github.com/actions/using-workflows/events-that-trigger-workflows#schedule
-
-## Why I did not target Vercel or Netlify
-
-Those platforms are great for static sites and serverless APIs, but this app depends on a persistent Node process, Playwright, and scheduled scraping. A single container host is much simpler and cheaper for this project.
+The app depends on long-running Playwright/Chromium work and coordinated scheduled jobs. A container service with a terminating cron process maps cleanly to those requirements.

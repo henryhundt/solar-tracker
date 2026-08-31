@@ -9,7 +9,7 @@ import { scrapeSolarEdgeBrowser } from "./scrapers/solaredge-browser";
 import { scrapeAlsoEnergyBrowser } from "./scrapers/alsoenergy-browser";
 import { scrapeMock } from "./scrapers/mock";
 
-interface ScraperResult {
+export interface ScraperResult {
   success: boolean;
   error?: string;
   readingsCount?: number;
@@ -28,8 +28,20 @@ export async function scrapeSite(site: Site): Promise<ScraperResult> {
     return { success: true, skipped: true, readingsCount: 0 };
   }
 
-  await storage.updateSite(currentSite.id, { status: "scraping", lastError: null });
+  const claimedSite = await storage.claimSiteForScrape(currentSite.id);
+  if (!claimedSite) {
+    return {
+      success: true,
+      skipped: true,
+      readingsCount: 0,
+      error: "A sync is already in progress for this site.",
+    };
+  }
 
+  return scrapeClaimedSite(claimedSite);
+}
+
+export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResult> {
   try {
     console.log(`Starting scrape for site: ${currentSite.name} (${currentSite.scraperType})`);
     const readingBounds = await storage.getReadingBounds(currentSite.id);
@@ -100,25 +112,29 @@ export async function scrapeSite(site: Site): Promise<ScraperResult> {
         break;
 
       case "mock":
-      default:
         readings = await scrapeMock(currentSite, historyWindow);
         break;
+
+      default:
+        throw new Error(`Unsupported scraper type: ${String(currentSite.scraperType)}`);
     }
 
     if (readings.length > 0) {
       if (currentSite.scraperType === "egauge") {
-        const replacedReadings = await storage.deleteReadingsInRange(
+        const replacement = await storage.replaceReadingsInRange(
           currentSite.id,
           historyWindow.start,
-          historyWindow.end
+          historyWindow.end,
+          readings,
         );
-        if (replacedReadings > 0) {
-          console.log(`Replaced ${replacedReadings} existing eGauge reading(s) in the refreshed window for ${currentSite.name}`);
+        if (replacement.deletedCount > 0) {
+          console.log(`Replaced ${replacement.deletedCount} existing eGauge reading(s) in the refreshed window for ${currentSite.name}`);
         }
+        console.log(`Stored ${replacement.readings.length} reading(s) for ${currentSite.name} in one transaction`);
+      } else {
+        const savedReadings = await storage.upsertReadings(readings);
+        console.log(`Stored ${savedReadings.length} reading(s) for ${currentSite.name} (inserted new rows or refreshed existing timestamps)`);
       }
-
-      const savedReadings = await storage.upsertReadings(readings);
-      console.log(`Stored ${savedReadings.length} reading(s) for ${currentSite.name} (inserted new rows or refreshed existing timestamps)`);
     }
 
     const cutoff = getHourlyHistoryCutoff();
@@ -129,18 +145,21 @@ export async function scrapeSite(site: Site): Promise<ScraperResult> {
 
     await storage.updateSite(currentSite.id, { 
       status: "idle", 
+      syncStartedAt: null,
       lastSyncedAt: new Date(),
       lastError: null
     });
 
     return { success: true, readingsCount: readings.length };
 
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
     console.error(`Scrape failed for site ${currentSite.id}:`, error);
     await storage.updateSite(currentSite.id, { 
       status: "error", 
-      lastError: error.message || "Unknown error" 
+      syncStartedAt: null,
+      lastError: message,
     });
-    return { success: false, error: error.message };
+    return { success: false, error: message };
   }
 }

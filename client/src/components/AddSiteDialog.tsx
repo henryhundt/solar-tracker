@@ -12,7 +12,7 @@ import { Plus, Key, User, Search, Loader2, CheckCircle2, Zap, AlertCircle, Sun }
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertSiteSchema } from "@shared/schema";
+import { insertSiteSchema, scraperTypeSchema } from "@shared/schema";
 import { buildAlsoEnergyProviderConfig } from "@shared/alsoenergy";
 import {
   getRecommendedEGaugeRegisterIds,
@@ -56,6 +56,7 @@ export function AddSiteDialog() {
     defaultValues: {
       name: "",
       url: "",
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Chicago",
       acCapacityKw: null,
       dcCapacityKw: null,
       notes: "",
@@ -80,7 +81,9 @@ export function AddSiteDialog() {
   };
 
   const handleScraperTypeChange = (val: string) => {
-    setValue("scraperType", val);
+    const parsedType = scraperTypeSchema.safeParse(val);
+    if (!parsedType.success) return;
+    setValue("scraperType", parsedType.data);
     setDiscoveredSites([]);
     setSelectedSiteIds(new Set());
     setDiscoveryError(null);
@@ -150,6 +153,16 @@ export function AddSiteDialog() {
     : scraperType === "solaredge_browser"
     ? "SolarEdge Site ID or Site Name"
     : "Portal Site Name (optional)";
+  const siteIdentifierPlaceholder = scraperType === "solaredge_api"
+    ? "e.g. 1234567"
+    : scraperType === "alsoenergy"
+    ? "e.g. S41121"
+    : "e.g. Main Building";
+  const siteIdentifierHelp = scraperType === "solaredge_api"
+    ? "The numeric Site ID from your SolarEdge portal URL (e.g. monitoring.solaredge.com/site/1234567)"
+    : scraperType === "alsoenergy"
+    ? "Use the discovered PowerTrack key. Numeric API site IDs are stored separately when available."
+    : "For multi-site portals, enter the exact site name as it appears on the dashboard.";
 
   const bulkDialogTitle = isAlsoEnergy
     ? "Connect Also Energy Sites"
@@ -664,6 +677,16 @@ export function AddSiteDialog() {
               {errors.url && <span className="text-xs text-red-500">{errors.url.message}</span>}
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="timezone">Site Timezone</Label>
+              <Input id="timezone" placeholder="America/Chicago" {...register("timezone")} className="rounded-xl font-mono" data-testid="input-timezone" />
+              {errors.timezone ? (
+                <span className="text-xs text-red-500">{errors.timezone.message}</span>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use an IANA timezone so daily totals follow the site’s local day.</p>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="acCapacityKw">AC Size (kW)</Label>
@@ -844,17 +867,13 @@ export function AddSiteDialog() {
                 <Label htmlFor="siteIdentifier">{siteIdentifierLabel}</Label>
                 <Input
                   id="siteIdentifier"
-                  placeholder={scraperType === "solaredge_api" ? "e.g. 1234567" : scraperType === "alsoenergy" ? "e.g. S41121" : "e.g. Main Building"}
+                  placeholder={siteIdentifierPlaceholder}
                   {...register("siteIdentifier")}
                   className="rounded-xl"
                   data-testid="input-site-identifier"
                 />
                 <p className="text-xs text-muted-foreground">
-                  {scraperType === "solaredge_api"
-                    ? "The numeric Site ID from your SolarEdge portal URL (e.g. monitoring.solaredge.com/site/1234567)"
-                    : scraperType === "alsoenergy"
-                    ? "Use the discovered PowerTrack key. Numeric API site IDs are stored separately when available."
-                    : "For multi-site portals, enter the exact site name as it appears on the dashboard."}
+                  {siteIdentifierHelp}
                 </p>
               </div>
             )}

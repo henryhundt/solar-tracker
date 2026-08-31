@@ -1,5 +1,6 @@
 import type { Site } from "@shared/schema";
 import type { HistoryWindow } from "../history";
+import { fetchWithTimeout } from "../provider-http";
 
 interface SolarEdgeReading {
   siteId: number;
@@ -139,7 +140,7 @@ async function fetchEnergyData(
   
   console.log(`[SolarEdge API] Fetching hourly energy data...`);
   
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
   
   if (!response.ok) {
     throw new Error(await buildSolarEdgeApiErrorMessage(response));
@@ -159,7 +160,7 @@ async function fetchDailyEnergy(
   
   console.log(`[SolarEdge API] Fetching daily energy data...`);
   
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
   
   if (!response.ok) {
     throw new Error(await buildSolarEdgeApiErrorMessage(response));
@@ -236,7 +237,7 @@ function chunkDateRange(start: Date, end: Date, chunkDays: number): Array<{ star
 
 export async function discoverSolarEdgeApiSites(apiKey: string): Promise<SolarEdgeDiscoveredSite[]> {
   const url = `${SOLAREDGE_API_BASE}/sites/list?size=100&api_key=${apiKey}`;
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
 
   if (!response.ok) {
     throw new Error(await buildSolarEdgeApiErrorMessage(response));

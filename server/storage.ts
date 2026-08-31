@@ -1,14 +1,15 @@
-import { db } from "./db";
+import { db, pool } from "./db";
 import {
   sites,
   readings,
+  syncLeases,
   type Site,
   type InsertSite,
-  type UpdateSiteRequest,
   type Reading,
   type InsertReading
 } from "@shared/schema";
-import { eq, desc, asc, and, gte, lte, lt, sql, isNull, isNotNull } from "drizzle-orm";
+import { eq, ne, desc, asc, and, or, gte, lte, lt, sql, isNull, isNotNull } from "drizzle-orm";
+import { decryptSiteCredentials, encryptSiteCredentials } from "./credentials";
 
 export interface SiteFilters {
   includeArchived?: boolean;
@@ -17,6 +18,7 @@ export interface SiteFilters {
 
 export interface ReadingFilters {
   includeArchivedSites?: boolean;
+  limit?: number;
 }
 
 export interface ReadingBounds {
@@ -31,16 +33,13 @@ export interface DashboardDailyEnergyRow {
   energyWh: number;
 }
 
-export interface DashboardLatestReadingRow {
-  siteId: number;
-  timestamp: Date;
-  energyWh: number;
-  powerW: number | null;
-}
-
 export interface DashboardSummary {
   dailyEnergy: DashboardDailyEnergyRow[];
-  latestReadings: DashboardLatestReadingRow[];
+}
+
+export interface ReadingReplacementResult {
+  deletedCount: number;
+  readings: Reading[];
 }
 
 export interface IStorage {
@@ -48,7 +47,8 @@ export interface IStorage {
   getSites(filters?: SiteFilters): Promise<Site[]>;
   getSite(id: number): Promise<Site | undefined>;
   createSite(site: InsertSite): Promise<Site>;
-  updateSite(id: number, updates: UpdateSiteRequest): Promise<Site>;
+  updateSite(id: number, updates: Partial<Site>): Promise<Site>;
+  claimSiteForScrape(id: number, staleBefore?: Date): Promise<Site | undefined>;
   archiveSite(id: number): Promise<Site>;
   restoreSite(id: number): Promise<Site>;
   deleteSite(id: number): Promise<void>;
@@ -64,11 +64,22 @@ export interface IStorage {
   getDashboardSummary(from: Date): Promise<DashboardSummary>;
   addReadings(readings: InsertReading[]): Promise<Reading[]>;
   upsertReadings(readings: InsertReading[]): Promise<Reading[]>;
+  replaceReadingsInRange(
+    siteId: number,
+    from: Date,
+    to: Date,
+    newReadings: InsertReading[],
+  ): Promise<ReadingReplacementResult>;
   getLastReading(siteId: number): Promise<Reading | undefined>;
   getReadingBounds(siteId: number): Promise<ReadingBounds>;
   pruneReadingsBefore(siteId: number, cutoff: Date): Promise<number>;
   deleteReadingsInRange(siteId: number, from: Date, to: Date): Promise<number>;
-  resetStaleScrapingSites(): Promise<number>;
+  resetStaleScrapingSites(staleBefore?: Date): Promise<number>;
+
+  // Cross-process job leases
+  acquireSyncLease(name: string, ownerId: string, leaseMs: number): Promise<boolean>;
+  renewSyncLease(name: string, ownerId: string, leaseMs: number): Promise<boolean>;
+  releaseSyncLease(name: string, ownerId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -89,25 +100,47 @@ export class DatabaseStorage implements IStorage {
     }
 
     // @ts-ignore
-    return await query.orderBy(asc(sites.name));
+    const storedSites = await query.orderBy(asc(sites.name));
+    return storedSites.map(decryptSiteCredentials);
   }
 
   async getSite(id: number): Promise<Site | undefined> {
     const [site] = await db.select().from(sites).where(eq(sites.id, id));
-    return site;
+    return site ? decryptSiteCredentials(site) : undefined;
   }
 
   async createSite(insertSite: InsertSite): Promise<Site> {
-    const [site] = await db.insert(sites).values(insertSite).returning();
-    return site;
+    const [site] = await db.insert(sites).values(encryptSiteCredentials(insertSite)).returning();
+    return decryptSiteCredentials(site);
   }
 
-  async updateSite(id: number, updates: UpdateSiteRequest): Promise<Site> {
+  async updateSite(id: number, updates: Partial<Site>): Promise<Site> {
     const [updated] = await db.update(sites)
-      .set(updates)
+      .set(encryptSiteCredentials(updates))
       .where(eq(sites.id, id))
       .returning();
-    return updated;
+    return decryptSiteCredentials(updated);
+  }
+
+  async claimSiteForScrape(id: number, staleBefore = new Date(Date.now() - 2 * 60 * 60 * 1000)): Promise<Site | undefined> {
+    const [claimed] = await db.update(sites)
+      .set({
+        status: "scraping",
+        syncStartedAt: new Date(),
+        lastError: null,
+      })
+      .where(and(
+        eq(sites.id, id),
+        isNull(sites.archivedAt),
+        or(
+          ne(sites.status, "scraping"),
+          isNull(sites.syncStartedAt),
+          lt(sites.syncStartedAt, staleBefore),
+        ),
+      ))
+      .returning();
+
+    return claimed ? decryptSiteCredentials(claimed) : undefined;
   }
 
   async archiveSite(id: number): Promise<Site> {
@@ -160,7 +193,15 @@ export class DatabaseStorage implements IStorage {
     }
 
     // @ts-ignore
-    return await query.orderBy(sortOrder === "asc" ? asc(readings.timestamp) : desc(readings.timestamp));
+    query = query.orderBy(sortOrder === "asc" ? asc(readings.timestamp) : desc(readings.timestamp));
+
+    if (filters.limit) {
+      // @ts-ignore - Drizzle narrows query builder types after dynamic clauses.
+      query = query.limit(filters.limit);
+    }
+
+    // @ts-ignore
+    return await query;
   }
 
   async addReadings(newReadings: InsertReading[]): Promise<Reading[]> {
@@ -170,10 +211,11 @@ export class DatabaseStorage implements IStorage {
 
   async getDashboardSummary(from: Date): Promise<DashboardSummary> {
     const activeSiteCondition = isNull(sites.archivedAt);
+    const localDay = sql`date_trunc('day', ${readings.timestamp} AT TIME ZONE ${sites.timezone})`;
 
     const dailyEnergy = await db.select({
       siteId: readings.siteId,
-      date: sql<string>`to_char(date_trunc('day', ${readings.timestamp}), 'YYYY-MM-DD')`,
+      date: sql<string>`to_char(${localDay}, 'YYYY-MM-DD')`,
       energyWh: sql<number>`sum(${readings.energyWh})::float`,
     })
       .from(readings)
@@ -184,41 +226,15 @@ export class DatabaseStorage implements IStorage {
       ))
       .groupBy(
         readings.siteId,
-        sql`date_trunc('day', ${readings.timestamp})`,
+        localDay,
       )
       .orderBy(
-        asc(sql`date_trunc('day', ${readings.timestamp})`),
+        asc(localDay),
         asc(readings.siteId),
-      );
-
-    const latestReadingsQuery = db.select({
-      siteId: readings.siteId,
-      latestTimestamp: sql<Date>`max(${readings.timestamp})`.as("latest_timestamp"),
-    })
-      .from(readings)
-      .innerJoin(sites, eq(readings.siteId, sites.id))
-      .where(activeSiteCondition)
-      .groupBy(readings.siteId)
-      .as("latest_readings");
-
-    const latestReadings = await db.select({
-      siteId: readings.siteId,
-      timestamp: readings.timestamp,
-      energyWh: readings.energyWh,
-      powerW: readings.powerW,
-    })
-      .from(readings)
-      .innerJoin(
-        latestReadingsQuery,
-        and(
-          eq(readings.siteId, latestReadingsQuery.siteId),
-          eq(readings.timestamp, latestReadingsQuery.latestTimestamp),
-        ),
       );
 
     return {
       dailyEnergy,
-      latestReadings,
     };
   }
 
@@ -235,6 +251,43 @@ export class DatabaseStorage implements IStorage {
         },
       })
       .returning();
+  }
+
+  async replaceReadingsInRange(
+    siteId: number,
+    from: Date,
+    to: Date,
+    newReadings: InsertReading[],
+  ): Promise<ReadingReplacementResult> {
+    return db.transaction(async (tx) => {
+      const deleted = await tx.delete(readings)
+        .where(and(
+          eq(readings.siteId, siteId),
+          gte(readings.timestamp, from),
+          lte(readings.timestamp, to),
+        ))
+        .returning({ id: readings.id });
+
+      if (newReadings.length === 0) {
+        return { deletedCount: deleted.length, readings: [] };
+      }
+
+      const savedReadings = await tx.insert(readings)
+        .values(newReadings)
+        .onConflictDoUpdate({
+          target: [readings.siteId, readings.timestamp],
+          set: {
+            energyWh: sql`excluded.energy_wh`,
+            powerW: sql`excluded.power_w`,
+          },
+        })
+        .returning();
+
+      return {
+        deletedCount: deleted.length,
+        readings: savedReadings,
+      };
+    });
   }
 
   async getLastReading(siteId: number): Promise<Reading | undefined> {
@@ -285,16 +338,61 @@ export class DatabaseStorage implements IStorage {
     return deleted.length;
   }
 
-  async resetStaleScrapingSites(): Promise<number> {
+  async resetStaleScrapingSites(staleBefore = new Date(Date.now() - 2 * 60 * 60 * 1000)): Promise<number> {
     const updatedSites = await db.update(sites)
       .set({
         status: "idle",
+        syncStartedAt: null,
         lastError: "Previous sync was interrupted before completion.",
       })
-      .where(eq(sites.status, "scraping"))
+      .where(and(
+        eq(sites.status, "scraping"),
+        or(
+          isNull(sites.syncStartedAt),
+          lt(sites.syncStartedAt, staleBefore),
+        ),
+      ))
       .returning({ id: sites.id });
 
     return updatedSites.length;
+  }
+
+  async acquireSyncLease(name: string, ownerId: string, leaseMs: number): Promise<boolean> {
+    const result = await pool.query<{ owner_id: string }>(
+      `
+        INSERT INTO sync_leases (name, owner_id, acquired_at, expires_at)
+        VALUES ($1, $2, NOW(), NOW() + ($3 * INTERVAL '1 millisecond'))
+        ON CONFLICT (name) DO UPDATE
+          SET owner_id = EXCLUDED.owner_id,
+              acquired_at = EXCLUDED.acquired_at,
+              expires_at = EXCLUDED.expires_at
+          WHERE sync_leases.expires_at <= NOW()
+        RETURNING owner_id
+      `,
+      [name, ownerId, leaseMs],
+    );
+
+    return result.rows[0]?.owner_id === ownerId;
+  }
+
+  async renewSyncLease(name: string, ownerId: string, leaseMs: number): Promise<boolean> {
+    const [renewed] = await db.update(syncLeases)
+      .set({ expiresAt: new Date(Date.now() + leaseMs) })
+      .where(and(
+        eq(syncLeases.name, name),
+        eq(syncLeases.ownerId, ownerId),
+      ))
+      .returning({ name: syncLeases.name });
+
+    return Boolean(renewed);
+  }
+
+  async releaseSyncLease(name: string, ownerId: string): Promise<void> {
+    await db.delete(syncLeases)
+      .where(and(
+        eq(syncLeases.name, name),
+        eq(syncLeases.ownerId, ownerId),
+      ));
   }
 }
 
