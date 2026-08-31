@@ -6,7 +6,6 @@ import { rm, readFile } from "fs/promises";
 // which helps cold start times
 const allowlist = [
   "@google/generative-ai",
-  "axios",
   "connect-pg-simple",
   "cors",
   "date-fns",
@@ -26,7 +25,6 @@ const allowlist = [
   "pg",
   "stripe",
   "uuid",
-  "ws",
   "xlsx",
   "zod",
   "zod-validation-error",
@@ -47,11 +45,16 @@ async function buildAll() {
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
   await esbuild({
-    entryPoints: ["server/index.ts"],
+    entryPoints: {
+      index: "server/index.ts",
+      migrate: "server/migrate.ts",
+      "sync-all": "server/sync-all.ts",
+    },
     platform: "node",
     bundle: true,
     format: "cjs",
-    outfile: "dist/index.cjs",
+    outdir: "dist",
+    outExtension: { ".js": ".cjs" },
     define: {
       "process.env.NODE_ENV": '"production"',
     },

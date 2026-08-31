@@ -13,7 +13,7 @@ import { Pencil, Key, User, Search, Loader2, CheckCircle2, Zap, AlertCircle, Sun
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertSiteSchema, type PublicSite } from "@shared/schema";
+import { insertSiteSchema, scraperTypeSchema, type PublicSite } from "@shared/schema";
 import {
   buildAlsoEnergyProviderConfig,
   getAlsoEnergyApiSiteId,
@@ -70,6 +70,7 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
     defaultValues: {
       name: site.name,
       url: site.url,
+      timezone: site.timezone,
       acCapacityKw: site.acCapacityKw ?? null,
       dcCapacityKw: site.dcCapacityKw ?? null,
       notes: site.notes ?? "",
@@ -98,6 +99,7 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
       reset({
         name: site.name,
         url: site.url,
+        timezone: site.timezone,
         acCapacityKw: site.acCapacityKw ?? null,
         dcCapacityKw: site.dcCapacityKw ?? null,
         notes: site.notes ?? "",
@@ -126,7 +128,9 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
   }, [open, site, reset]);
 
   const handleScraperTypeChange = (val: string) => {
-    setValue("scraperType", val);
+    const parsedType = scraperTypeSchema.safeParse(val);
+    if (!parsedType.success) return;
+    setValue("scraperType", parsedType.data);
     setDiscoveredSites([]);
     setDiscoveryError(null);
     setEGaugeRegisters([]);
@@ -432,6 +436,16 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
             <Label htmlFor="edit-url">Portal URL</Label>
             <Input id="edit-url" placeholder="https://portal.solar-provider.com" {...register("url")} className="rounded-xl" data-testid="input-edit-url" />
             {errors.url && <span className="text-xs text-red-500">{errors.url.message}</span>}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-timezone">Site Timezone</Label>
+            <Input id="edit-timezone" placeholder="America/Chicago" {...register("timezone")} className="rounded-xl font-mono" data-testid="input-edit-timezone" />
+            {errors.timezone ? (
+              <span className="text-xs text-red-500">{errors.timezone.message}</span>
+            ) : (
+              <p className="text-xs text-muted-foreground">Use an IANA timezone so daily totals follow the site’s local day.</p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

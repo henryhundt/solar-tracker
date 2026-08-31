@@ -18,6 +18,8 @@ npm-debug.log*
 
 # Archives and local exports
 *.tar.gz
+backups/
+*.dump
 
 # Editor settings
 .vscode/

@@ -1,45 +1,32 @@
-name: Daily Full Site Sync
+name: Manual Full Site Sync (Fallback)
 
 on:
-  schedule:
-    # 1:15 AM Central with daylight-saving coverage:
-    # - 06:15 UTC is 1:15 AM CDT
-    # - 07:15 UTC is 1:15 AM CST
-    - cron: "15 6 * * *"
-    - cron: "15 7 * * *"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-full-site-sync
+  cancel-in-progress: false
 
 jobs:
   sync-all-sites:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 180
 
     steps:
-      - name: Check Central Time
-        id: central_time
-        shell: bash
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            echo "should_run=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          central_hour="$(TZ=America/Chicago date +%H)"
-          if [[ "${central_hour}" == "01" ]]; then
-            echo "should_run=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "should_run=false" >> "${GITHUB_OUTPUT}"
-          fi
-
       - name: Trigger full site sync
-        if: steps.central_time.outputs.should_run == 'true'
         env:
+          SOLAR_TRACKER_SYNC_URL: ${{ secrets.SOLAR_TRACKER_SYNC_URL }}
           APP_URL: ${{ secrets.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         shell: bash
         run: |
-          if [[ -z "${APP_URL}" ]]; then
-            echo "APP_URL repository secret is required."
+          sync_url="${SOLAR_TRACKER_SYNC_URL:-${APP_URL:-}}"
+
+          if [[ -z "${sync_url}" ]]; then
+            echo "SOLAR_TRACKER_SYNC_URL repository secret is required. APP_URL is also accepted for existing setups."
             exit 1
           fi
 
@@ -48,7 +35,7 @@ jobs:
             exit 1
           fi
 
-          curl --fail --show-error --silent --max-time 60 \
+          curl --fail-with-body --show-error --silent --max-time 10800 \
             --request POST \
             --header "Authorization: Bearer ${CRON_SECRET}" \
-            "${APP_URL%/}/api/internal/sync-all"
+            "${sync_url%/}/api/internal/sync-all"

@@ -134,6 +134,10 @@ export const api = {
       method: 'POST' as const,
       path: '/api/sites/:id/scrape',
       responses: {
+        202: z.object({
+          message: z.string(),
+          success: z.boolean(),
+        }),
         200: z.object({
           message: z.string(),
           success: z.boolean(),
@@ -152,6 +156,10 @@ export const api = {
       path: '/api/sites/sync-all',
       responses: {
         202: z.object({
+          message: z.string(),
+          success: z.boolean(),
+        }),
+        409: z.object({
           message: z.string(),
           success: z.boolean(),
         }),
@@ -176,6 +184,7 @@ export const api = {
         siteId: z.coerce.number().optional(),
         from: z.string().optional(),
         to: z.string().optional(),
+        limit: z.coerce.number().int().positive().optional(),
       }).optional(),
       responses: {
         200: z.array(z.custom<typeof readings.$inferSelect>()),

@@ -5,6 +5,7 @@ import type { PublicSite, Site, UpdateSiteRequest } from "@shared/schema";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
+import { rateLimit } from "express-rate-limit";
 import {
   authenticateAdmin,
   destroyAuthenticatedSession,
@@ -13,34 +14,54 @@ import {
   requireAppAuth,
   saveAuthenticatedSession,
 } from "./auth";
-import { scrapeSite } from "./scraper";
+import { scrapeClaimedSite } from "./scraper";
 import { discoverAlsoEnergyBrowserSites } from "./scrapers/alsoenergy-browser";
 import { discoverAlsoEnergySites } from "./scrapers/alsoenergy";
 import { discoverSolarEdgeApiSites } from "./scrapers/solaredge-api";
 import { discoverSolarEdgeBrowserSites } from "./scrapers/solaredge-browser";
 import { inspectEGaugeRegisters, resolveEGaugeAccess } from "./scrapers/egauge-client";
-import { startScheduler, syncAllSites } from "./scheduler";
+import { startScheduler, startSyncAllSites, syncAllSites } from "./scheduler";
+import { trackBackgroundTask } from "./sync-runtime";
+import { pool } from "./db";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   const SOLAREDGE_PORTAL_URL = "https://monitoring.solaredge.com";
+  const DEFAULT_READINGS_LOOKBACK_MONTHS = 24;
+  const DEFAULT_READINGS_LIST_LIMIT = 5000;
+  const MAX_READINGS_LIST_LIMIT = 10000;
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { message: "Too many login attempts. Try again later." },
+  });
 
   const resetCount = await storage.resetStaleScrapingSites();
   if (resetCount > 0) {
     console.log(`Reset ${resetCount} site(s) left in scraping state from a previous run.`);
   }
 
-  app.get("/healthz", (_req, res) => {
-    res.json({ ok: true });
+  app.get("/healthz", async (_req, res) => {
+    try {
+      await pool.query("SELECT 1");
+      return res.json({ ok: true, database: "connected" });
+    } catch (error) {
+      console.error("Health check database query failed:", error);
+      return res.status(503).json({ ok: false, database: "unavailable" });
+    }
   });
 
   app.get(api.auth.session.path, (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
     res.json(getAuthSessionResponse(req));
   });
 
-  app.post(api.auth.login.path, async (req, res) => {
+  app.post(api.auth.login.path, loginLimiter, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
     try {
       const { username, password } = api.auth.login.input.parse(req.body);
 
@@ -67,6 +88,7 @@ export async function registerRoutes(
   });
 
   app.post(api.auth.logout.path, async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
     if (req.session.isAuthenticated) {
       await destroyAuthenticatedSession(req);
     }
@@ -82,8 +104,19 @@ export async function registerRoutes(
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    syncAllSites().catch(console.error);
-    res.status(202).json({ message: "Syncing all sites", success: true });
+    const syncTask = syncAllSites();
+    trackBackgroundTask(syncTask, "Externally triggered full sync");
+    const run = await syncTask;
+    if (!run.started) {
+      return res.status(409).json({ message: "A full sync is already running", success: false });
+    }
+
+    const status = run.summary.failed > 0 || run.summary.skipped > 0 ? 502 : 200;
+    return res.status(status).json({
+      message: status === 200 ? "Full sync completed" : "Full sync completed with site failures or skips",
+      success: status === 200,
+      summary: run.summary,
+    });
   });
 
   app.use("/api", requireAppAuth);
@@ -183,27 +216,26 @@ export async function registerRoutes(
   // Scraping Route
   app.post(api.sites.scrape.path, async (req, res) => {
     const id = Number(req.params.id);
-    const site = await storage.getSite(id);
-    if (!site) return res.status(404).json({ message: "Site not found" });
-    if (site.archivedAt) {
+    const existing = await storage.getSite(id);
+    if (!existing) return res.status(404).json({ message: "Site not found" });
+    if (existing.archivedAt) {
       return res.status(409).json({ message: "Restore this archived site before syncing it.", success: false });
     }
-    if (site.status === "scraping") {
+
+    const claimed = await storage.claimSiteForScrape(id);
+    if (!claimed) {
       return res.status(409).json({ message: "This site is already syncing", success: false });
     }
 
-    const result = await scrapeSite(site);
-    if (!result.success) {
-      return res.status(500).json({ message: result.error || "Scrape failed", success: false });
-    }
+    runSiteScrapeInBackground(claimed);
 
-    res.json({ message: "Scrape completed", success: true, readingsCount: result.readingsCount ?? 0 });
+    res.status(202).json({ message: "Sync started", success: true });
   });
 
   // Readings Route
   app.get(api.readings.summary.path, async (req, res) => {
     try {
-      const from = req.query.from ? new Date(String(req.query.from)) : undefined;
+      const from = parseOptionalDateParam(req.query.from, "from");
       const summary = await storage.getDashboardSummary(from ?? new Date(0));
 
       res.json({
@@ -212,28 +244,33 @@ export async function registerRoutes(
           date: point.date,
           energyWh: point.energyWh,
         })),
-        latestReadings: summary.latestReadings.map((reading) => ({
-          siteId: reading.siteId,
-          timestamp: new Date(reading.timestamp).toISOString(),
-          energyWh: reading.energyWh,
-          powerW: reading.powerW,
-        })),
       });
     } catch (err) {
+      if (err instanceof RequestValidationError) {
+        return res.status(400).json({ message: err.message });
+      }
+
       res.status(500).json({ message: "Failed to fetch dashboard summary" });
     }
   });
 
   app.get(api.readings.list.path, async (req, res) => {
     try {
-      // Manual parsing since query params are strings
-      const siteId = req.query.siteId ? Number(req.query.siteId) : undefined;
-      const from = req.query.from ? new Date(String(req.query.from)) : undefined;
-      const to = req.query.to ? new Date(String(req.query.to)) : undefined;
+      const input = api.readings.list.input?.parse(req.query);
+      const from = parseOptionalDateParam(input?.from, "from") ?? getDefaultReadingsFromDate(DEFAULT_READINGS_LOOKBACK_MONTHS);
+      const to = parseOptionalDateParam(input?.to, "to");
+      const limit = Math.min(input?.limit ?? DEFAULT_READINGS_LIST_LIMIT, MAX_READINGS_LIST_LIMIT);
 
-      const readings = await storage.getReadings(siteId, from, to);
+      const readings = await storage.getReadings(input?.siteId, from, to, "desc", { limit });
       res.json(readings.map(serializeReading));
     } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      if (err instanceof RequestValidationError) {
+        return res.status(400).json({ message: err.message });
+      }
+
       res.status(500).json({ message: "Failed to fetch readings" });
     }
   });
@@ -241,8 +278,8 @@ export async function registerRoutes(
   app.get(api.readings.export.path, async (req, res) => {
     try {
       const siteId = req.query.siteId ? Number(req.query.siteId) : undefined;
-      const from = req.query.from ? new Date(String(req.query.from)) : undefined;
-      const to = req.query.to ? new Date(String(req.query.to)) : undefined;
+      const from = parseOptionalDateParam(req.query.from, "from") ?? getDefaultReadingsFromDate(DEFAULT_READINGS_LOOKBACK_MONTHS);
+      const to = parseOptionalDateParam(req.query.to, "to");
 
       const [sites, readings] = await Promise.all([
         storage.getSites({ includeArchived: true }),
@@ -285,6 +322,10 @@ export async function registerRoutes(
       res.setHeader("Content-Disposition", `attachment; filename=\"solar-readings-${fileLabel}-${dateLabel}.csv\"`);
       res.send(csv);
     } catch (err) {
+      if (err instanceof RequestValidationError) {
+        return res.status(400).json({ message: err.message });
+      }
+
       res.status(500).json({ message: "Failed to export readings" });
     }
   });
@@ -514,8 +555,13 @@ export async function registerRoutes(
 
   // Manual trigger for syncing all sites
   app.post(api.sites.syncAll.path, async (req, res) => {
-    syncAllSites().catch(console.error);
-    res.status(202).json({ message: "Syncing all sites", success: true });
+    const run = await startSyncAllSites();
+    if (!run.started) {
+      return res.status(409).json({ message: "A full sync is already running", success: false });
+    }
+
+    trackBackgroundTask(run.completion, "Manual full sync");
+    return res.status(202).json({ message: "Full sync started", success: true });
   });
 
   // Seed Data function
@@ -533,6 +579,28 @@ function resolveScopedSecret(credentialKey: string, suffix: string, fallback: st
   }
 
   return process.env[`${credentialKey}_${suffix}`] || fallback;
+}
+
+class RequestValidationError extends Error {}
+
+function parseOptionalDateParam(value: unknown, label: string): Date | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) {
+    throw new RequestValidationError(`${label} must be a valid date.`);
+  }
+
+  return parsed;
+}
+
+function getDefaultReadingsFromDate(months: number): Date {
+  const from = new Date();
+  from.setMonth(from.getMonth() - months);
+  from.setHours(0, 0, 0, 0);
+  return from;
 }
 
 async function loadSiteForCredentialFallback(siteId?: number): Promise<Site | undefined> {
@@ -582,6 +650,29 @@ function clearBlankSecret(updates: UpdateSiteRequest, key: "username" | "passwor
   if (updates[key] === undefined || updates[key] === "") {
     delete updates[key];
   }
+}
+
+function runSiteScrapeInBackground(site: Site) {
+  const task = scrapeClaimedSite(site)
+    .then((result) => {
+      if (!result.success && !result.skipped) {
+        console.error(`Background sync failed for site ${site.id}: ${result.error || "Unknown error"}`);
+      }
+    })
+    .catch(async (error: any) => {
+      console.error(`Background sync crashed for site ${site.id}:`, error);
+      try {
+        await storage.updateSite(site.id, {
+          status: "error",
+          syncStartedAt: null,
+          lastError: error?.message || "Unknown sync error",
+        });
+      } catch (updateError) {
+        console.error(`Failed to mark site ${site.id} as errored after sync crash:`, updateError);
+      }
+    });
+
+  trackBackgroundTask(task, `Background sync for site ${site.id}`);
 }
 
 function serializeSite(site: Site): PublicSite {

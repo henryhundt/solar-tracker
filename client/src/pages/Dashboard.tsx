@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { format, formatDistanceToNow, isToday, startOfDay, subDays } from "date-fns";
 import { Download, ExternalLink, LineChart, RefreshCw, Sun, Zap } from "lucide-react";
 import { Layout } from "@/components/Layout";
@@ -74,14 +74,17 @@ function formatScraperLabel(scraperType: string) {
 
 export default function Dashboard() {
   const { data: sites, isLoading: isLoadingSites } = useSites();
+  const isAnySiteSyncing = sites?.some((site) => site.status === "scraping") ?? false;
   const historyFrom = startOfDay(subDays(new Date(), HISTORY_WINDOW_DAYS - 1)).toISOString();
   const {
     data: dashboardSummary,
     isLoading: isLoadingSummary,
     refetch: refetchDashboardSummary,
-  } = useDashboardSummary({ from: historyFrom });
+  } = useDashboardSummary({ from: historyFrom }, { refetchWhileSyncing: isAnySiteSyncing });
   const syncAllSitesMutation = useSyncAllSites();
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
+  const wasSyncingRef = useRef(false);
+  const syncAllClickLockedRef = useRef(false);
 
   const buildExportUrl = () => {
     const url = new URL("/api/readings/export", window.location.origin);
@@ -108,7 +111,7 @@ export default function Dashboard() {
   let previousTotalWh = 0;
   const reportingSiteIds = new Set<number>();
 
-  for (const point of filteredDailyEnergy) {
+  for (const point of dailyEnergy) {
     const readingDate = parseSummaryDate(point.date);
 
     if (readingDate < todayStart) {
@@ -121,6 +124,10 @@ export default function Dashboard() {
         });
       }
     }
+  }
+
+  for (const point of filteredDailyEnergy) {
+    const readingDate = parseSummaryDate(point.date);
 
     if (readingDate >= currentWindowStart) {
       currentTotalWh += point.energyWh;
@@ -157,7 +164,6 @@ export default function Dashboard() {
   const averageDailyWh = chartData.length > 0 ? currentTotalWh / chartData.length : 0;
   const activeSitesCount = sites?.length ?? 0;
   const syncedTodayCount = sites?.filter((site) => site.lastSyncedAt && isToday(new Date(site.lastSyncedAt))).length ?? 0;
-  const isAnySiteSyncing = sites?.some((site) => site.status === "scraping") ?? false;
   const sitesNeedingAttention = sites?.filter((site) => site.status === "error").length ?? 0;
   const staleSitesCount = sites?.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "stale").length ?? 0;
   const unsyncedSitesCount = sites?.filter((site) => getSyncHealth(site.lastSyncedAt, now) === "never").length ?? 0;
@@ -177,18 +183,41 @@ export default function Dashboard() {
   const latestSiteSyncLabel = latestSiteSync
     ? formatDistanceToNow(latestSiteSync, { addSuffix: true })
     : "No successful sync yet";
+  const isSyncAllBlocked = syncAllSitesMutation.isPending || isAnySiteSyncing;
 
-  useEffect(() => {
-    if (!isAnySiteSyncing) {
+  const handleSyncAllSites = () => {
+    if (syncAllClickLockedRef.current || isSyncAllBlocked) {
       return;
     }
 
-    const refreshInterval = window.setInterval(() => {
-      void refetchDashboardSummary();
-    }, 5000);
+    syncAllClickLockedRef.current = true;
+    syncAllSitesMutation.mutate(undefined, {
+      onError: () => {
+        syncAllClickLockedRef.current = false;
+      },
+    });
+  };
 
-    return () => window.clearInterval(refreshInterval);
+  useEffect(() => {
+    if (isAnySiteSyncing) {
+      wasSyncingRef.current = true;
+      return;
+    }
+
+    if (!wasSyncingRef.current) {
+      return;
+    }
+
+    wasSyncingRef.current = false;
+    syncAllClickLockedRef.current = false;
+    void refetchDashboardSummary();
   }, [isAnySiteSyncing, refetchDashboardSummary]);
+
+  useEffect(() => {
+    if (!syncAllSitesMutation.isPending && !isAnySiteSyncing) {
+      syncAllClickLockedRef.current = false;
+    }
+  }, [isAnySiteSyncing, syncAllSitesMutation.isPending]);
 
   if (isLoadingSites || isLoadingSummary) {
     return (
@@ -270,18 +299,18 @@ export default function Dashboard() {
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                onClick={() => syncAllSitesMutation.mutate()}
-                disabled={syncAllSitesMutation.isPending || isAnySiteSyncing}
+                onClick={handleSyncAllSites}
+                disabled={isSyncAllBlocked}
                 className="rounded-full px-4"
                 data-testid="button-sync-all-sites"
               >
                 <RefreshCw
                   className={cn(
                     "h-4 w-4",
-                    (syncAllSitesMutation.isPending || isAnySiteSyncing) && "animate-spin"
+                    isSyncAllBlocked && "animate-spin"
                   )}
                 />
-                {syncAllSitesMutation.isPending || isAnySiteSyncing ? "Syncing..." : "Sync All"}
+                {isSyncAllBlocked ? "Syncing..." : "Sync All"}
               </Button>
               <Button asChild variant="outline" className="rounded-full px-4">
                 <a href={buildExportUrl()}>

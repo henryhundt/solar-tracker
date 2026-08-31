@@ -1,11 +1,33 @@
 import express, { type Request, Response, NextFunction } from "express";
+import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { configureAuth } from "./auth";
+import { pool } from "./db";
+import { getActiveTaskCount, waitForBackgroundTasks } from "./sync-runtime";
+import { initializeCredentialEncryption } from "./credentials";
 
 const app = express();
 const httpServer = createServer(app);
+
+app.disable("x-powered-by");
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: process.env.NODE_ENV === "production"
+        ? ["'self'"]
+        : ["'self'", "ws:", "wss:"],
+      objectSrc: ["'none'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+}));
 
 declare module "http" {
   interface IncomingMessage {
@@ -15,13 +37,14 @@ declare module "http" {
 
 app.use(
   express.json({
+    limit: "100kb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "100kb" }));
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -62,6 +85,7 @@ app.use((req, res, next) => {
 
 (async () => {
   await configureAuth(app);
+  await initializeCredentialEncryption();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -95,17 +119,67 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
-})();
+  await new Promise<void>((resolve, reject) => {
+    const handleListenError = (error: Error) => reject(error);
+    httpServer.once("error", handleListenError);
+    httpServer.listen(
+      {
+        port,
+        host: "0.0.0.0",
+      },
+      () => {
+        httpServer.off("error", handleListenError);
+        log(`serving on port ${port}`);
+        resolve();
+      },
+    );
+  });
+})().catch(async (error) => {
+  console.error("Server startup failed:", error);
+  process.exitCode = 1;
+  await pool.end().catch(() => undefined);
+});
+
+let shutdownStarted = false;
+
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shutdownStarted) {
+    return;
+  }
+  shutdownStarted = true;
+
+  const graceMs = parsePositiveNumber(process.env.SHUTDOWN_GRACE_MS, 30_000);
+  log(`received ${signal}; waiting up to ${graceMs}ms for ${getActiveTaskCount()} background task(s)`, "shutdown");
+  const serverClosed = new Promise<boolean>((resolve) => {
+    httpServer.close((error) => {
+      if (error) {
+        console.error("HTTP server close failed:", error);
+        resolve(false);
+        return;
+      }
+      resolve(true);
+    });
+  });
+
+  const connectionTimeout = new Promise<false>((resolve) => {
+    const timeout = setTimeout(() => resolve(false), graceMs);
+    timeout.unref();
+  });
+  const [tasksCompleted, connectionsClosed] = await Promise.all([
+    waitForBackgroundTasks(graceMs),
+    Promise.race([serverClosed, connectionTimeout]),
+  ]);
+
+  if (!tasksCompleted || !connectionsClosed) {
+    console.error("Shutdown grace period expired before all work completed.");
+    process.exitCode = 1;
+  }
+
+  await pool.end();
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 function redactSensitiveData(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -145,4 +219,9 @@ function compactLogPayload(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value).map(([key, entryValue]) => [key, compactLogPayload(entryValue)]),
   );
+}
+
+function parsePositiveNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
