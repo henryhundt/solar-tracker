@@ -15,6 +15,7 @@
     "sync:all:local": "npm run migrate:local && ./scripts/run-local-node.sh --env-file=.env dist/sync-all.cjs",
     "check": "tsc",
     "test": "tsx --test tests/*.test.ts",
+    "test:browser": "tsx --test tests/browser/*.test.ts",
     "db:push": "drizzle-kit push",
     "db:push:local": "./scripts/run-local-node.sh --env-file=.env ./node_modules/drizzle-kit/bin.cjs push"
   },

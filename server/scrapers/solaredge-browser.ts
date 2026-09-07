@@ -2,6 +2,7 @@ import type { Site } from "@shared/schema";
 import type { HistoryWindow } from "../history";
 import type { APIRequestContext, Browser, Page } from "playwright";
 import { launchScraperChromium } from "./playwright";
+import { loginSolarEdge } from "./solaredge-login";
 import type { SolarEdgeDiscoveredSite } from "./solaredge-api";
 
 interface SolarEdgeReading {
@@ -62,8 +63,7 @@ export async function scrapeSolarEdgeBrowser(
     
     const page = await context.newPage();
     
-    await login(page, username, password);
-    await page.waitForTimeout(3000);
+    await loginSolarEdge(page, username, password);
 
     const browserSite = await resolveSolarEdgeBrowserSite(page, site.siteIdentifier || site.name);
     console.log(`[SolarEdge Browser] Resolved site ${browserSite.siteId} (${browserSite.siteName})`);
@@ -100,112 +100,6 @@ export async function scrapeSolarEdgeBrowser(
       await browser.close();
     }
   }
-}
-
-async function login(page: Page, username: string, password: string): Promise<void> {
-  console.log(`[SolarEdge Browser] Navigating to login page...`);
-  
-  await page.goto(`${SOLAREDGE_MONITORING_URL}/solaredge-web/p/login`, {
-    waitUntil: 'networkidle',
-    timeout: 30000
-  });
-
-  const usernameFieldSelector = 'input[name="username"], input[name="j_username"], input[type="email"], #username';
-  const passwordFieldSelector = 'input[name="password"], input[name="j_password"], input[type="password"], #password';
-
-  await revealCredentialFormIfNeeded(page, usernameFieldSelector);
-
-  const usernameSelector = page.locator(usernameFieldSelector).first();
-  const passwordSelector = page.locator(passwordFieldSelector).first();
-
-  if ((await usernameSelector.count()) === 0 || (await passwordSelector.count()) === 0) {
-    throw new Error("Could not find login form fields");
-  }
-  
-  console.log(`[SolarEdge Browser] Entering credentials...`);
-  
-  await usernameSelector.fill(username);
-  await passwordSelector.fill(password);
-
-  const submitButton = await findVisibleLoginSubmitButton(page);
-  if (submitButton) {
-    await submitButton.click();
-  } else {
-    await passwordSelector.press('Enter');
-  }
-  
-  console.log(`[SolarEdge Browser] Waiting for login to complete...`);
-  
-  try {
-    await page.waitForURL(/.*\/solaredge-web\/p\/site\/|.*dashboard|.*monitoring/i, {
-      timeout: 15000
-    });
-    console.log(`[SolarEdge Browser] Login successful`);
-  } catch (error) {
-    const errorMessage = await page.$('.error-message, .login-error, [class*="error"]');
-    if (errorMessage) {
-      const errorText = await errorMessage.textContent();
-      throw new Error(`Login failed: ${errorText}`);
-    }
-    throw new Error("Login failed: Could not navigate to dashboard after login");
-  }
-}
-
-async function revealCredentialFormIfNeeded(page: Page, usernameFieldSelector: string): Promise<void> {
-  const usernameField = page.locator(usernameFieldSelector).first();
-  if ((await usernameField.count()) > 0) {
-    return;
-  }
-
-  const loginButtons = [
-    page.getByRole("button", { name: /^log in$/i }).first(),
-    page.locator("button").filter({ hasText: /^log in$/i }).first(),
-  ];
-
-  for (const button of loginButtons) {
-    if ((await button.count()) === 0) {
-      continue;
-    }
-
-    try {
-      console.log("[SolarEdge Browser] Opening the current login form...");
-      await button.click();
-      await page.waitForLoadState("networkidle");
-      break;
-    } catch (_error) {
-      // Try the next candidate if this click path is no longer valid.
-    }
-  }
-
-  await page.waitForSelector(usernameFieldSelector, {
-    timeout: 15000,
-  });
-}
-
-async function findVisibleLoginSubmitButton(page: Page) {
-  const candidates = [
-    page.getByRole("button", { name: /sign in|log in/i }).first(),
-    page.locator('button[type="submit"]').first(),
-    page.locator('input[type="submit"]').first(),
-    page.locator('[data-testid="login-button"]').first(),
-    page.locator('.login-button').first(),
-  ];
-
-  for (const candidate of candidates) {
-    if ((await candidate.count()) === 0) {
-      continue;
-    }
-
-    try {
-      if (await candidate.isVisible()) {
-        return candidate;
-      }
-    } catch (_error) {
-      // Ignore detached candidates and try the next one.
-    }
-  }
-
-  return null;
 }
 
 async function navigateToSite(page: Page, siteIdentifier: string | null): Promise<string> {
@@ -543,7 +437,7 @@ export async function discoverSolarEdgeBrowserSites(
 
     const page = await context.newPage();
 
-    await login(page, username, password);
+    await loginSolarEdge(page, username, password);
     await page.waitForTimeout(3000);
 
     const apiSites = await fetchSolarEdgeBrowserSites(page);

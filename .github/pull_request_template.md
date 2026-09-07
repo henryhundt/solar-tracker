@@ -6,6 +6,7 @@
 
 - [ ] `npm run check`
 - [ ] `npm test`
+- [ ] `npm run test:browser`
 - [ ] `npm run build`
 - [ ] `npm audit --omit=dev --audit-level=high`
 - [ ] Database changes include an immutable, forward-only migration
