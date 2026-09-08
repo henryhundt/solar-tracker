@@ -1,4 +1,4 @@
-import type { Page, Response } from "playwright";
+import type { Page, Request, Response } from "playwright";
 
 const MONITORING_ORIGIN = "https://monitoring.solaredge.com";
 const USERNAME_SELECTOR = 'input[name="username"], input[name="j_username"], input[type="email"], input[autocomplete="username"], #username';
@@ -14,12 +14,40 @@ export async function loginSolarEdge(
   const remaining = () => Math.max(1, deadline - Date.now());
   let phase = "opening the login page";
   let navigationStatus: number | undefined;
+  const authPosts: Array<{ status: number; code?: string }> = [];
+  let failedAuthRequests = 0;
+  const isAuthPost = (request: Request) => {
+    const url = new URL(request.url());
+    return url.origin === "https://login.solaredge.com" && request.method() === "POST";
+  };
+  const recordFailedRequest = (request: Request) => {
+    if (isAuthPost(request)) failedAuthRequests += 1;
+  };
   const recordNavigation = (response: Response) => {
     if (response.request().isNavigationRequest() && response.frame() === page.mainFrame()) {
       navigationStatus = response.status();
     }
+    if (isAuthPost(response.request()) && authPosts.length < 16) {
+      const entry: { status: number; code?: string } = { status: response.status() };
+      authPosts.push(entry);
+      // Keep only recognized error identifiers, never raw provider responses,
+      // tokens, endpoint paths, request bodies, or credential values.
+      if (response.status() >= 400 && response.headers()["content-type"]?.includes("application/json")) {
+        void response.json().then((body: unknown) => {
+          if (!body || typeof body !== "object") return;
+          const fields = body as Record<string, unknown>;
+          for (const value of [fields.error, fields.code, fields.errorCode]) {
+            if (typeof value === "string" && SAFE_AUTH_CODES.has(value)) {
+              entry.code = value;
+              break;
+            }
+          }
+        }).catch(() => { /* Diagnostics must never replace the login error. */ });
+      }
+    }
   };
   page.on("response", recordNavigation);
+  page.on("requestfailed", recordFailedRequest);
 
   try {
     console.log("[SolarEdge Browser] Navigating to login page...");
@@ -93,11 +121,39 @@ export async function loginSolarEdge(
       // A closed page may not have a usable URL.
     }
     const kind = error instanceof Error ? error.name : "Error";
+    const signals = await loginPageSignals(page);
     throw new Error(
-      `SolarEdge login failed while ${phase} (${kind}; page: ${location}; HTTP: ${navigationStatus ?? "unavailable"}).`,
+      `SolarEdge login failed while ${phase} (${kind}; page: ${location}; HTTP: ${navigationStatus ?? "unavailable"}). `
+      + `Auth diagnostics: ${JSON.stringify({ authPosts, failedAuthRequests, signals })}`,
     );
   } finally {
     page.off("response", recordNavigation);
+    page.off("requestfailed", recordFailedRequest);
+  }
+}
+
+const SAFE_AUTH_CODES = new Set([
+  "invalid_user_password", "invalid_grant", "access_denied", "unauthorized",
+  "too_many_attempts", "too_many_requests", "blocked_user", "password_leaked",
+  "mfa_required", "mfa_registration_required", "requires_verification", "invalid_captcha",
+]);
+
+async function loginPageSignals(page: Page): Promise<string[]> {
+  try {
+    // Classify visible text in memory. Raw text can contain credentials and
+    // OAuth values, so only these fixed labels may leave this function.
+    const text = await page.locator("body").innerText({ timeout: 500 });
+    const patterns: Array<[string, RegExp]> = [
+      ["invalid-credentials", /wrong email or password|invalid (?:email|username|password|credentials)|incorrect (?:email|username|password)|username or password is incorrect/i],
+      ["account-blocked-or-rate-limited", /account (?:is |has been )?(?:blocked|locked)|too many (?:login|failed|attempts|requests)|suspicious (?:login|activity)/i],
+      ["human-verification", /captcha|verify (?:that )?you are human|security challenge|checking your browser/i],
+      ["mfa", /verification code|authentication code|one.time (?:code|password)|two.factor|multi.factor/i],
+      ["password-reset-required", /reset your password|password (?:has )?expired|change your password/i],
+      ["generic-provider-error", /something went wrong|unable to (?:log|sign) in|access denied|unauthorized|unexpected error/i],
+    ];
+    return patterns.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+  } catch {
+    return ["page-unavailable"];
   }
 }
 
