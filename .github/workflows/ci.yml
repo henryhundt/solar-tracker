@@ -53,6 +53,12 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: Install Chromium for browser regression tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser regression tests
+        run: npm run test:browser
+
       - name: Build
         run: npm run build
 

@@ -8,9 +8,13 @@ Before opening a pull request, run:
 npm ci
 npm run check
 npm test
+npx playwright install chromium
+npm run test:browser
 npm run build
 npm audit --omit=dev --audit-level=high
 ```
+
+Browser regression tests use intercepted fixture pages and synthetic credentials; they do not contact solar providers.
 
 ## Database changes
 
