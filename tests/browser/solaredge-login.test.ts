@@ -21,6 +21,7 @@ interface Fixture {
   welcome?: string;
   signIn?: string;
   status?: number;
+  authFailure?: { status: number; body: unknown } | "network";
 }
 
 async function withFixture(fixture: Fixture, run: (page: Page) => Promise<void>): Promise<void> {
@@ -29,6 +30,14 @@ async function withFixture(fixture: Fixture, run: (page: Page) => Promise<void>)
   // real credentials, despite exercising its redirect origins and paths.
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/diagnostic-auth-private-path") {
+      if (fixture.authFailure === "network" || !fixture.authFailure) {
+        await route.abort();
+      } else {
+        await route.fulfill({ status: fixture.authFailure.status, json: fixture.authFailure.body });
+      }
+      return;
+    }
     const bodies: Record<string, string | undefined> = {
       [`${MONITORING}/solaredge-web/p/login`]: fixture.start,
       [`${MONITORING}/mfe/auth/`]: fixture.welcome,
@@ -142,6 +151,7 @@ for (const variant of ["monitoring login page", "OAuth sign-in page"] as const) 
         return true;
       });
       assert.equal(page.listenerCount("response"), 0);
+      assert.equal(page.listenerCount("requestfailed"), 0);
     });
   });
 }
@@ -154,6 +164,39 @@ test("reports the login stage and HTTP status when the provider page is unavaila
     assert.equal(page.listenerCount("response"), 0);
   });
 });
+
+for (const scenario of [
+  { name: "rate limit", response: { status: 429, body: { error: "too_many_attempts", description: PASSWORD } }, message: "Too many attempts", expected: /"status":429,"code":"too_many_attempts"/, signal: "account-blocked-or-rate-limited" },
+  { name: "credential rejection", response: { status: 401, body: { error: "invalid_user_password", token: "private-oauth-code" } }, message: "Wrong email or password", expected: /"status":401,"code":"invalid_user_password"/, signal: "invalid-credentials" },
+  { name: "unknown provider error", response: { status: 403, body: { error: PASSWORD, code: USERNAME } }, message: "Verify you are human", expected: /"status":403\}/, signal: "human-verification" },
+  { name: "network failure", response: "network" as const, message: "Something went wrong", expected: /"authPosts":\[\],"failedAuthRequests":1/, signal: "generic-provider-error" },
+]) {
+  test(`reports safe diagnostics for ${scenario.name}`, async () => {
+    const signIn = credentialForm({ reject: true }) + `<script>
+      document.getElementById('credentials').addEventListener('submit', async () => {
+        try {
+          await fetch('/diagnostic-auth-private-path?token=private-oauth-code', {
+            method: 'POST', body: ${JSON.stringify(PASSWORD)},
+          });
+        } catch {}
+        document.body.insertAdjacentHTML('beforeend', '<div role="alert">${scenario.message} ${USERNAME} ${PASSWORD}</div>');
+      });
+    </script>`;
+    await withFixture({
+      start: `<script>location.href = ${JSON.stringify(LOGIN)}</script>`,
+      signIn, authFailure: scenario.response,
+    }, async (page) => {
+      await assert.rejects(loginSolarEdge(page, USERNAME, PASSWORD, { timeoutMs: 2200 }), (error: Error) => {
+        assert.match(error.message, scenario.expected);
+        assert.ok(error.message.includes(scenario.signal));
+        assert.doesNotMatch(error.message, /fixture-user|fixture-password|private-oauth-code|diagnostic-auth-private-path|redirect_uri/);
+        return true;
+      });
+      assert.equal(page.listenerCount("response"), 0);
+      assert.equal(page.listenerCount("requestfailed"), 0);
+    });
+  });
+}
 
 test("does not expose credentials from Playwright fill errors", async () => {
   await withFixture({ start: '<input type="email" disabled><input type="password">' }, async (page) => {
