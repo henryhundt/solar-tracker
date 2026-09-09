@@ -9,7 +9,7 @@ interface SolarEdgeReading {
   siteId: number;
   timestamp: Date;
   energyWh: number;
-  powerW: number;
+  powerW: number | null;
 }
 
 interface SolarEdgeSiteSearchResponse {
@@ -39,7 +39,7 @@ interface SolarEdgeDashboardPowerResponse {
 
 const SOLAREDGE_MONITORING_URL = "https://monitoring.solaredge.com";
 const SOLAREDGE_BROWSER_SEARCH_PAGE_SIZE = 20;
-const SOLAREDGE_BROWSER_DAILY_CHUNK_DAYS = 120;
+const SOLAREDGE_BROWSER_DAILY_CHUNK_DAYS = 31;
 const SOLAREDGE_BROWSER_HIGH_RES_DAYS = 3;
 const SOLAREDGE_BROWSER_HIGH_RES_CHUNK_DAYS = 3;
 
@@ -68,19 +68,11 @@ export async function scrapeSolarEdgeBrowser(
     const browserSite = await resolveSolarEdgeBrowserSite(page, site.siteIdentifier || site.name);
     console.log(`[SolarEdge Browser] Resolved site ${browserSite.siteId} (${browserSite.siteName})`);
 
-    let readings: SolarEdgeReading[];
-    try {
-      readings = await extractEnergyDataFromDashboardApis(
-        page.context().request,
-        site,
-        browserSite.siteId,
-        historyWindow
-      );
-    } catch (error: any) {
-      console.log(`[SolarEdge Browser] Dashboard API extraction failed, falling back to page scraping: ${error.message}`);
-      await navigateToSite(page, browserSite.siteId);
-      readings = await extractEnergyData(page, site);
-    }
+    // Only timestamped provider measurements are valid readings. Never infer
+    // daily production from unrelated numbers in rendered dashboard text.
+    const readings = await extractEnergyDataFromDashboardApis(
+      page.context().request, site, browserSite.siteId, historyWindow,
+    );
 
     const filteredReadings = filterReadingsToWindow(readings, historyWindow);
     
@@ -100,319 +92,6 @@ export async function scrapeSolarEdgeBrowser(
       await browser.close();
     }
   }
-}
-
-async function navigateToSite(page: Page, siteIdentifier: string | null): Promise<string> {
-  const browserSite = await resolveSolarEdgeBrowserSite(page, siteIdentifier);
-  const siteUrl = `${SOLAREDGE_MONITORING_URL}/one#/residential/dashboard?siteId=${browserSite.siteId}`;
-
-  console.log(`[SolarEdge Browser] Navigating to site: ${browserSite.siteId} (${browserSite.siteName})`);
-  await page.goto(siteUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
-  await page.waitForTimeout(5000);
-  return page.url();
-}
-
-async function extractEnergyData(page: Page, site: Site): Promise<SolarEdgeReading[]> {
-  console.log(`[SolarEdge Browser] Extracting energy data...`);
-  
-  const readings: SolarEdgeReading[] = [];
-  
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  yesterday.setHours(0, 0, 0, 0);
-  const targetDateCopy = new Date(yesterday.getTime());
-  
-  try {
-    const apiData = await extractFromNetworkRequests(page, site, targetDateCopy);
-    if (apiData.length > 0) {
-      return apiData;
-    }
-  } catch (error) {
-    console.log(`[SolarEdge Browser] Could not extract from network, trying DOM...`);
-  }
-  
-  try {
-    const domData = await extractFromDOM(page, site, new Date(yesterday.getTime()));
-    if (domData.length > 0) {
-      return domData;
-    }
-  } catch (error) {
-    console.log(`[SolarEdge Browser] Could not extract from DOM, trying chart data...`);
-  }
-  
-  try {
-    const chartData = await extractFromChartElements(page, site, new Date(yesterday.getTime()));
-    if (chartData.length > 0) {
-      return chartData;
-    }
-  } catch (error) {
-    console.log(`[SolarEdge Browser] Could not extract chart data`);
-  }
-  
-  const dailyEnergy = await extractDailyTotal(page);
-  if (dailyEnergy !== null) {
-    const noonTimestamp = new Date(yesterday.getTime());
-    noonTimestamp.setHours(12, 0, 0, 0);
-    readings.push({
-      siteId: site.id,
-      timestamp: noonTimestamp,
-      energyWh: dailyEnergy,
-      powerW: Math.round(dailyEnergy / 12)
-    });
-  }
-  
-  return readings;
-}
-
-async function extractFromNetworkRequests(
-  page: Page,
-  site: Site,
-  targetDate: Date
-): Promise<SolarEdgeReading[]> {
-  const readings: SolarEdgeReading[] = [];
-  const capturedResponses: any[] = [];
-  
-  page.on('response', async (response) => {
-    const url = response.url();
-    if (url.includes('/energy') || url.includes('/power') || url.includes('/chart')) {
-      try {
-        const data = await response.json();
-        capturedResponses.push(data);
-      } catch (e) {
-      }
-    }
-  });
-  
-  const energyTabs = await page.$$('[class*="energy"], [data-tab="energy"], a[href*="energy"]');
-  for (const tab of energyTabs) {
-    try {
-      await tab.click();
-      await page.waitForTimeout(2000);
-      break;
-    } catch (e) {
-    }
-  }
-  
-  await page.waitForTimeout(3000);
-  
-  if (capturedResponses.length === 0) {
-    console.log(`[SolarEdge Browser] No API responses captured, trying page reload...`);
-    await page.reload({ waitUntil: 'networkidle' });
-    await page.waitForTimeout(3000);
-  }
-  
-  for (const data of capturedResponses) {
-    if (data.energy?.values) {
-      for (const value of data.energy.values) {
-        if (value.date && value.value !== null) {
-          readings.push({
-            siteId: site.id,
-            timestamp: new Date(value.date),
-            energyWh: value.value,
-            powerW: value.value
-          });
-        }
-      }
-    }
-    
-    if (data.power?.values) {
-      for (const value of data.power.values) {
-        if (value.date && value.value !== null && !readings.find(r => r.timestamp.getTime() === new Date(value.date).getTime())) {
-          const ts = new Date(value.date);
-          readings.push({
-            siteId: site.id,
-            timestamp: ts,
-            energyWh: value.value,
-            powerW: value.value
-          });
-        }
-      }
-    }
-  }
-  
-  console.log(`[SolarEdge Browser] Captured ${readings.length} readings from network requests`);
-  return readings;
-}
-
-function filterReadingsToWindow(
-  readings: SolarEdgeReading[],
-  historyWindow?: HistoryWindow
-): SolarEdgeReading[] {
-  if (!historyWindow) {
-    return readings;
-  }
-
-  return readings.filter((reading) => (
-    reading.timestamp >= historyWindow.start &&
-    reading.timestamp <= historyWindow.end
-  ));
-}
-
-async function extractFromDOM(
-  page: Page,
-  site: Site,
-  targetDate: Date
-): Promise<SolarEdgeReading[]> {
-  const readings: SolarEdgeReading[] = [];
-  
-  const energyValues = await page.$$eval(
-    '[class*="energy"], [class*="production"], [data-value]',
-    (elements) => elements.map(el => ({
-      text: el.textContent,
-      value: el.getAttribute('data-value')
-    }))
-  );
-  
-  for (const item of energyValues) {
-    const value = item.value || item.text;
-    if (value) {
-      const numericValue = parseEnergyValue(value);
-      if (numericValue > 0) {
-        const noonTimestamp = new Date(targetDate.getTime());
-        noonTimestamp.setHours(12, 0, 0, 0);
-        readings.push({
-          siteId: site.id,
-          timestamp: noonTimestamp,
-          energyWh: numericValue,
-          powerW: Math.round(numericValue / 12)
-        });
-        break;
-      }
-    }
-  }
-  
-  return readings;
-}
-
-async function extractFromChartElements(
-  page: Page,
-  site: Site,
-  targetDate: Date
-): Promise<SolarEdgeReading[]> {
-  const readings: SolarEdgeReading[] = [];
-  
-  const chartData = await page.evaluate(() => {
-    const win = window as any;
-    
-    if (win.Highcharts && win.Highcharts.charts) {
-      for (const chart of win.Highcharts.charts) {
-        if (chart && chart.series) {
-          for (const series of chart.series) {
-            if (series.data && series.data.length > 0) {
-              return series.data.map((point: any) => ({
-                x: point.x,
-                y: point.y
-              }));
-            }
-          }
-        }
-      }
-    }
-    
-    if (win.__CHART_DATA__) {
-      return win.__CHART_DATA__;
-    }
-    
-    return null;
-  });
-  
-  if (chartData && Array.isArray(chartData)) {
-    for (const point of chartData) {
-      if (point.x && point.y !== null && point.y !== undefined) {
-        readings.push({
-          siteId: site.id,
-          timestamp: new Date(point.x),
-          energyWh: point.y,
-          powerW: point.y
-        });
-      }
-    }
-  }
-  
-  return readings;
-}
-
-async function extractDailyTotal(page: Page): Promise<number | null> {
-  const selectors = [
-    '[class*="daily-energy"]',
-    '[class*="today"]',
-    '[class*="production"] [class*="value"]',
-    '.energy-value',
-    '[data-type="energy"]'
-  ];
-  
-  for (const selector of selectors) {
-    try {
-      const element = await page.$(selector);
-      if (element) {
-        const text = await element.textContent();
-        if (text) {
-          const value = parseEnergyValue(text);
-          if (value > 0) {
-            console.log(`[SolarEdge Browser] Found daily total: ${value} Wh`);
-            return value;
-          }
-        }
-      }
-    } catch (error) {
-    }
-  }
-  
-  const allText = await page.textContent('body');
-  if (allText) {
-    const patterns = [
-      /(\d+(?:,\d{3})*(?:\.\d+)?)\s*kWh/gi,
-      /(\d+(?:,\d{3})*(?:\.\d+)?)\s*MWh/gi,
-      /Production[:\s]*(\d+(?:,\d{3})*(?:\.\d+)?)/gi
-    ];
-    
-    for (const pattern of patterns) {
-      const match = pattern.exec(allText);
-      if (match) {
-        let value = parseFloat(match[1].replace(/,/g, ''));
-        if (pattern.source.includes('kWh')) {
-          value *= 1000;
-        } else if (pattern.source.includes('MWh')) {
-          value *= 1000000;
-        }
-        if (value > 0 && value < 1000000000) {
-          console.log(`[SolarEdge Browser] Found energy value from text: ${value} Wh`);
-          return value;
-        }
-      }
-    }
-  }
-  
-  return null;
-}
-
-function parseEnergyValue(text: string): number {
-  const cleanText = text.replace(/[,\s]/g, '').toLowerCase();
-  
-  const mwhMatch = cleanText.match(/(\d+(?:\.\d+)?)\s*mwh/);
-  if (mwhMatch) {
-    return parseFloat(mwhMatch[1]) * 1000000;
-  }
-  
-  const kwhMatch = cleanText.match(/(\d+(?:\.\d+)?)\s*kwh/);
-  if (kwhMatch) {
-    return parseFloat(kwhMatch[1]) * 1000;
-  }
-  
-  const whMatch = cleanText.match(/(\d+(?:\.\d+)?)\s*wh/);
-  if (whMatch) {
-    return parseFloat(whMatch[1]);
-  }
-  
-  const numMatch = cleanText.match(/(\d+(?:\.\d+)?)/);
-  if (numMatch) {
-    return parseFloat(numMatch[1]);
-  }
-  
-  return 0;
 }
 
 interface SolarEdgeSiteLink extends SolarEdgeDiscoveredSite {
@@ -608,21 +287,22 @@ async function fetchSolarEdgeBrowserSearchPage(
   return response.json();
 }
 
-async function extractEnergyDataFromDashboardApis(
+export async function extractEnergyDataFromDashboardApis(
   request: APIRequestContext,
   site: Site,
   solarEdgeSiteId: string,
   historyWindow?: HistoryWindow
 ): Promise<SolarEdgeReading[]> {
   const requestedWindow = historyWindow ?? buildDefaultSolarEdgeBrowserWindow();
-  const start = new Date(requestedWindow.start);
-  const end = new Date(requestedWindow.end);
+  // Provider query dates are site-local calendar days, independent of server TZ.
+  const start = siteCalendarDate(requestedWindow.start, site.timezone);
+  const end = siteCalendarDate(requestedWindow.end, site.timezone);
   const readingsByTimestamp = new Map<number, SolarEdgeReading>();
 
   const highResolutionStart = getSolarEdgeHighResolutionStart(start, end);
   const dailyEnd = new Date(highResolutionStart);
-  dailyEnd.setDate(dailyEnd.getDate() - 1);
-  dailyEnd.setHours(23, 59, 59, 999);
+  dailyEnd.setUTCDate(dailyEnd.getUTCDate() - 1);
+  dailyEnd.setUTCHours(23, 59, 59, 999);
 
   if (start <= dailyEnd) {
     const dailyReadings = await fetchSolarEdgeDailyDashboardReadings(
@@ -652,11 +332,12 @@ async function extractEnergyDataFromDashboardApis(
     }
   }
 
-  if (readingsByTimestamp.size === 0) {
-    console.log("[SolarEdge Browser] Dashboard APIs returned no readings in the requested window.");
+  const inWindow = filterReadingsToWindow(Array.from(readingsByTimestamp.values()), requestedWindow);
+  if (inWindow.length === 0) {
+    throw new Error("SolarEdge dashboard returned no production measurements in the requested window; readings were not updated.");
   }
 
-  return Array.from(readingsByTimestamp.values()).sort(
+  return inWindow.sort(
     (left, right) => left.timestamp.getTime() - right.timestamp.getTime()
   );
 }
@@ -675,28 +356,27 @@ async function fetchSolarEdgeDailyDashboardReadings(
       `${SOLAREDGE_MONITORING_URL}/services/dashboard/energy/sites/${solarEdgeSiteId}` +
       `?start-date=${formatDate(chunk.start)}` +
       `&end-date=${formatDate(chunk.end)}` +
-      `&chart-time-unit=days&measurement-types=production,yield`
+      `&chart-time-unit=days&measurement-types=production&measurement-types=yield&isCniViewer=true`
     );
 
     if (!response.ok()) {
-      const errorText = await response.text();
-      throw new Error(`SolarEdge dashboard daily energy failed (${response.status()}): ${errorText.slice(0, 400)}`);
+      throw new Error(`SolarEdge dashboard daily energy failed (HTTP ${response.status()}).`);
     }
 
     const data: SolarEdgeDashboardEnergyResponse = await response.json();
-    for (const measurement of data.chart?.measurements ?? []) {
+    validateMeasurements(data.chart?.measurements);
+    for (const measurement of data.chart!.measurements!) {
       if (!measurement.measurementTime || measurement.production == null) {
         continue;
       }
 
       const timestamp = new Date(measurement.measurementTime);
-      timestamp.setHours(12, 0, 0, 0);
 
       readings.push({
         siteId: dbSiteId,
         timestamp,
         energyWh: measurement.production,
-        powerW: Math.round(measurement.production / 12),
+        powerW: null,
       });
     }
   }
@@ -718,16 +398,16 @@ async function fetchSolarEdgeQuarterHourDashboardReadings(
       `${SOLAREDGE_MONITORING_URL}/services/dashboard/power/sites/${solarEdgeSiteId}` +
       `?start-date=${formatDate(chunk.start)}` +
       `&end-date=${formatDate(chunk.end)}` +
-      `&chart-time-unit=quarter-hours&measurement-types=production,storage-charge-level`
+      `&chart-time-unit=quarter-hours&measurement-types=production&measurement-types=storage-charge-level`
     );
 
     if (!response.ok()) {
-      const errorText = await response.text();
-      throw new Error(`SolarEdge dashboard power failed (${response.status()}): ${errorText.slice(0, 400)}`);
+      throw new Error(`SolarEdge dashboard power failed (HTTP ${response.status()}).`);
     }
 
     const data: SolarEdgeDashboardPowerResponse = await response.json();
-    for (const measurement of data.measurements ?? []) {
+    validateMeasurements(data.measurements);
+    for (const measurement of data.measurements!) {
       if (!measurement.measurementTime || measurement.production == null) {
         continue;
       }
@@ -738,7 +418,7 @@ async function fetchSolarEdgeQuarterHourDashboardReadings(
       readings.push({
         siteId: dbSiteId,
         timestamp,
-        energyWh: Math.round(powerW / 4),
+        energyWh: powerW / 4,
         powerW,
       });
     }
@@ -757,8 +437,8 @@ function buildDefaultSolarEdgeBrowserWindow(): HistoryWindow {
 
 function getSolarEdgeHighResolutionStart(start: Date, end: Date): Date {
   const candidate = new Date(end);
-  candidate.setDate(candidate.getDate() - (SOLAREDGE_BROWSER_HIGH_RES_DAYS - 1));
-  candidate.setHours(0, 0, 0, 0);
+  candidate.setUTCDate(candidate.getUTCDate() - (SOLAREDGE_BROWSER_HIGH_RES_DAYS - 1));
+  candidate.setUTCHours(0, 0, 0, 0);
   return candidate > start ? candidate : new Date(start);
 }
 
@@ -857,24 +537,24 @@ function normalizeSolarEdgeSiteName(value: string | null | undefined): string | 
 }
 
 function formatDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
 function chunkDateRange(start: Date, end: Date, chunkDays: number): Array<{ start: Date; end: Date }> {
   const chunks: Array<{ start: Date; end: Date }> = [];
   const cursor = new Date(start);
-  cursor.setHours(0, 0, 0, 0);
+  cursor.setUTCHours(0, 0, 0, 0);
 
   const endBoundary = new Date(end);
-  endBoundary.setHours(0, 0, 0, 0);
+  endBoundary.setUTCHours(0, 0, 0, 0);
 
   while (cursor <= endBoundary) {
     const chunkStart = new Date(cursor);
     const chunkEnd = new Date(cursor);
-    chunkEnd.setDate(chunkEnd.getDate() + chunkDays - 1);
+    chunkEnd.setUTCDate(chunkEnd.getUTCDate() + chunkDays - 1);
     if (chunkEnd > endBoundary) {
       chunkEnd.setTime(endBoundary.getTime());
     }
@@ -882,8 +562,40 @@ function chunkDateRange(start: Date, end: Date, chunkDays: number): Array<{ star
     chunks.push({ start: chunkStart, end: chunkEnd });
 
     cursor.setTime(chunkEnd.getTime());
-    cursor.setDate(cursor.getDate() + 1);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
 
   return chunks;
+}
+
+function validateMeasurements(value: unknown): void {
+  if (!Array.isArray(value) || value.some(item =>
+    !item || typeof item !== "object"
+    || typeof item.measurementTime !== "string"
+    || !/(?:Z|[+-]\d{2}:\d{2})$/.test(item.measurementTime)
+    || !Number.isFinite(Date.parse(item.measurementTime))
+    || (item.production != null && (typeof item.production !== "number" || !Number.isFinite(item.production) || item.production < 0))
+  )) {
+    throw new Error("SolarEdge dashboard returned invalid timestamped production measurements.");
+  }
+}
+
+function filterReadingsToWindow(
+  readings: SolarEdgeReading[],
+  historyWindow?: HistoryWindow
+): SolarEdgeReading[] {
+  if (!historyWindow) {
+    return readings;
+  }
+
+  return readings.filter((reading) => (
+    reading.timestamp >= historyWindow.start &&
+    reading.timestamp <= historyWindow.end
+  ));
+}
+
+function siteCalendarDate(value: Date, timeZone: string): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {timeZone, year:"numeric", month:"2-digit", day:"2-digit"}).formatToParts(value);
+  const part = (type: string) => parts.find(item => item.type === type)!.value;
+  return new Date(`${part("year")}-${part("month")}-${part("day")}T00:00:00Z`);
 }
