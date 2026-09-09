@@ -21,7 +21,7 @@ interface Fixture {
   welcome?: string;
   signIn?: string;
   status?: number;
-  authFailure?: { status: number; body: unknown } | "network";
+  authFailure?: { status: number; body: unknown } | "network" | "pending";
 }
 
 async function withFixture(fixture: Fixture, run: (page: Page) => Promise<void>): Promise<void> {
@@ -31,6 +31,7 @@ async function withFixture(fixture: Fixture, run: (page: Page) => Promise<void>)
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/diagnostic-auth-private-path") {
+      if (fixture.authFailure === "pending") return;
       if (fixture.authFailure === "network" || !fixture.authFailure) {
         await route.abort();
       } else {
@@ -67,6 +68,7 @@ function credentialForm({ reject = false, hidden = false, legacy = false, submit
     : `${MONITORING}/mfe/auth/callback?code=private-oauth-code`;
   return `
     <form id="credentials" ${hidden ? 'style="display:none"' : ""}>
+      <input type="hidden" name="cognitoAsfData" value="fixture-ready">
       <label>Email address<input name="${legacy ? "j_username" : "username"}" type="${legacy ? "text" : "email"}"></label>
       <label>Password<input name="${legacy ? "j_password" : "password"}" type="password"></label>
       ${submitButton ? '<button type="submit">Sign in</button>' : ""}
@@ -76,7 +78,7 @@ function credentialForm({ reject = false, hidden = false, legacy = false, submit
       ${!submitButton ? "form.onkeydown = (event) => { if (event.key === 'Enter') { event.preventDefault(); form.requestSubmit(); } };" : ""}
       form.onsubmit = (event) => {
         event.preventDefault();
-        const values = Array.from(form.querySelectorAll('input')).map(input => input.value);
+        const values = Array.from(form.querySelectorAll('input:not([type=hidden])')).map(input => input.value);
         if (values[0] !== ${JSON.stringify(USERNAME)} || values[1] !== ${JSON.stringify(PASSWORD)}) {
           throw new Error('Fixture received incorrect credentials');
         }
@@ -206,5 +208,47 @@ test("does not expose credentials from Playwright fill errors", async () => {
       assert.equal(error.cause, undefined);
       return true;
     });
+  });
+});
+
+
+test("waits for Cognito initialization before entering credentials", async () => {
+  const signIn = credentialForm().replace('value="fixture-ready"', 'value=""') + `<script>
+    const originalSubmit = form.onsubmit;
+    form.onsubmit = event => event.preventDefault();
+    setTimeout(() => {
+      form.querySelector('[name=username]').value = '';
+      form.querySelector('[name=password]').value = '';
+      form.onsubmit = originalSubmit;
+      form.querySelector('[name=cognitoAsfData]').value = 'initialized';
+    }, 700);
+  </script>`;
+  await withFixture({ start: `<script>location.href = ${JSON.stringify(LOGIN)}</script>`, signIn }, async page => {
+    await loginSolarEdge(page, USERNAME, PASSWORD, {timeoutMs:5000});
+    assert.equal(page.url(), `${MONITORING}/one#/site-list`);
+    assert.equal(page.listenerCount('request'), 0);
+  });
+});
+
+test("reports a stalled request without submitting again", async () => {
+  const signIn = credentialForm({reject:true}) + `<script>
+    window.submitCount = 0;
+    form.addEventListener('submit', () => {
+      window.submitCount++;
+      fetch('/diagnostic-auth-private-path', {method:'POST'}).catch(() => {});
+    });
+  </script>`;
+  await withFixture({ start:`<script>location.href = ${JSON.stringify(LOGIN)}</script>`, signIn, authFailure:'pending' }, async page => {
+    await assert.rejects(loginSolarEdge(page, USERNAME, PASSWORD, {timeoutMs:2000}), /"pendingAuthRequests":1,"submission":"auth-request-awaiting-response"/);
+    assert.equal(await page.evaluate(() => (window as any).submitCount), 1);
+    assert.equal(page.listenerCount('request'), 0);
+  });
+});
+
+test("reports a form that never initializes without submitting credentials", async () => {
+  const signIn = credentialForm().replace('value="fixture-ready"', 'value=""');
+  await withFixture({ start:`<script>location.href = ${JSON.stringify(LOGIN)}</script>`, signIn }, async page => {
+    await assert.rejects(loginSolarEdge(page, USERNAME, PASSWORD, {timeoutMs:1500}), /waiting for the credential form to initialize.*no-auth-request-observed/);
+    assert.equal(await page.locator('[name=password]').inputValue(), '');
   });
 });

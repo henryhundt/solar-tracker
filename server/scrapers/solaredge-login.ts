@@ -16,14 +16,26 @@ export async function loginSolarEdge(
   let navigationStatus: number | undefined;
   const authPosts: Array<{ status: number; code?: string }> = [];
   let failedAuthRequests = 0;
+  let startedAuthRequests = 0;
+  const pendingAuthRequests = new Set<Request>();
   const isAuthPost = (request: Request) => {
     const url = new URL(request.url());
     return url.origin === "https://login.solaredge.com" && request.method() === "POST";
   };
   const recordFailedRequest = (request: Request) => {
-    if (isAuthPost(request)) failedAuthRequests += 1;
+    if (isAuthPost(request)) {
+      failedAuthRequests += 1;
+      pendingAuthRequests.delete(request);
+    }
+  };
+  const recordRequest = (request: Request) => {
+    if (isAuthPost(request)) {
+      startedAuthRequests += 1;
+      pendingAuthRequests.add(request);
+    }
   };
   const recordNavigation = (response: Response) => {
+    pendingAuthRequests.delete(response.request());
     if (response.request().isNavigationRequest() && response.frame() === page.mainFrame()) {
       navigationStatus = response.status();
     }
@@ -47,6 +59,7 @@ export async function loginSolarEdge(
     }
   };
   page.on("response", recordNavigation);
+  page.on("request", recordRequest);
   page.on("requestfailed", recordFailedRequest);
 
   try {
@@ -87,9 +100,28 @@ export async function loginSolarEdge(
       : visibleUsername;
     await usernameField.waitFor({ state: "visible", timeout: remaining() });
 
+    // Cognito renders usable-looking HTML before its React form is hydrated.
+    // Its async context field is populated by an effect after initialization.
+    // Wait for that actual readiness signal, not a fixed sleep or network idle.
+    if (new URL(page.url()).origin === "https://login.solaredge.com") {
+      phase = "waiting for the credential form to initialize";
+      await page.waitForFunction(() => {
+        const password = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="password"]'))
+          .find(input => input.getClientRects().length > 0);
+        return Boolean(password?.form?.querySelector<HTMLInputElement>('input[name="cognitoAsfData"]')?.value);
+      }, undefined, { timeout: remaining() });
+    }
+
     phase = "entering credentials";
     await usernameField.fill(username, { timeout: remaining() });
     await visiblePassword.fill(password, { timeout: remaining() });
+
+    phase = "verifying credential fields";
+    await usernameField.blur({ timeout: remaining() });
+    await visiblePassword.blur({ timeout: remaining() });
+    if (await usernameField.inputValue() !== username || await visiblePassword.inputValue() !== password) {
+      throw new Error("Credential fields changed before submission");
+    }
 
     phase = "submitting the credential form";
     const submitRoot = hasForm ? credentialForm : page;
@@ -122,12 +154,18 @@ export async function loginSolarEdge(
     }
     const kind = error instanceof Error ? error.name : "Error";
     const signals = await loginPageSignals(page);
+    const submission = startedAuthRequests === 0 ? "no-auth-request-observed"
+      : pendingAuthRequests.size > 0 ? "auth-request-awaiting-response"
+      : failedAuthRequests > 0 ? "auth-network-failure"
+      : authPosts.some(({ status }) => status >= 400) ? "auth-response-error"
+      : "auth-response-without-dashboard";
     throw new Error(
       `SolarEdge login failed while ${phase} (${kind}; page: ${location}; HTTP: ${navigationStatus ?? "unavailable"}). `
-      + `Auth diagnostics: ${JSON.stringify({ authPosts, failedAuthRequests, signals })}`,
+      + `Auth diagnostics: ${JSON.stringify({ authPosts, failedAuthRequests, signals, startedAuthRequests, pendingAuthRequests: pendingAuthRequests.size, submission })}`,
     );
   } finally {
     page.off("response", recordNavigation);
+    page.off("request", recordRequest);
     page.off("requestfailed", recordFailedRequest);
   }
 }

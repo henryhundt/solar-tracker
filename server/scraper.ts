@@ -63,7 +63,7 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
       siteId: number;
       timestamp: Date;
       energyWh: number;
-      powerW: number;
+      powerW: number | null;
     }> = [];
 
     switch (currentSite.scraperType) {
@@ -120,7 +120,7 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
     }
 
     if (readings.length > 0) {
-      if (currentSite.scraperType === "egauge") {
+      if (currentSite.scraperType === "egauge" || currentSite.scraperType === "solaredge_browser") {
         const replacement = await storage.replaceReadingsInRange(
           currentSite.id,
           historyWindow.start,
@@ -128,7 +128,7 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
           readings,
         );
         if (replacement.deletedCount > 0) {
-          console.log(`Replaced ${replacement.deletedCount} existing eGauge reading(s) in the refreshed window for ${currentSite.name}`);
+          console.log(`Replaced ${replacement.deletedCount} existing ${currentSite.scraperType} reading(s) in the refreshed window for ${currentSite.name}`);
         }
         console.log(`Stored ${replacement.readings.length} reading(s) for ${currentSite.name} in one transaction`);
       } else {
