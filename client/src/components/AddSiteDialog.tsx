@@ -1,3 +1,4 @@
+import { SMA_PORTAL_URL, SMA_SITE_HELP, smaSiteIdSchema } from "@shared/sma";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -91,7 +92,11 @@ export function AddSiteDialog() {
     setSelectedEGaugeRegisterIds(new Set());
     setEGaugeSelectionMode("manual");
     setEGaugeInspectError(null);
-    if (val === "egauge") {
+    if (val === "sma_browser") {
+      setValue("url", SMA_PORTAL_URL);
+      setValue("apiKey", "");
+      setValue("siteIdentifier", "");
+    } else if (val === "egauge") {
       setCredentialMode("direct");
       setValue("apiKey", "");
       setValue("siteIdentifier", "");
@@ -146,19 +151,25 @@ export function AddSiteDialog() {
   const needsCredentials = scraperType !== "solaredge_api";
   const needsApiKey = scraperType === "solaredge_api";
   const showSiteIdentifierField = scraperType !== "egauge";
-  const siteIdentifierLabel = scraperType === "solaredge_api" 
+  const siteIdentifierLabel = scraperType === "sma_browser"
+    ? "SMA System ID"
+    : scraperType === "solaredge_api"
     ? "Site ID (from SolarEdge portal URL)"
     : scraperType === "alsoenergy"
     ? "Also Energy PowerTrack Site Key"
     : scraperType === "solaredge_browser"
     ? "SolarEdge Site ID or Site Name"
     : "Portal Site Name (optional)";
-  const siteIdentifierPlaceholder = scraperType === "solaredge_api"
+  const siteIdentifierPlaceholder = scraperType === "sma_browser"
+    ? "e.g. 12345678"
+    : scraperType === "solaredge_api"
     ? "e.g. 1234567"
     : scraperType === "alsoenergy"
     ? "e.g. S41121"
     : "e.g. Main Building";
-  const siteIdentifierHelp = scraperType === "solaredge_api"
+  const siteIdentifierHelp = scraperType === "sma_browser"
+    ? SMA_SITE_HELP
+    : scraperType === "solaredge_api"
     ? "The numeric Site ID from your SolarEdge portal URL (e.g. monitoring.solaredge.com/site/1234567)"
     : scraperType === "alsoenergy"
     ? "Use the discovered PowerTrack key. Numeric API site IDs are stored separately when available."
@@ -333,6 +344,16 @@ export function AddSiteDialog() {
   const onSubmit = (data: FormValues) => {
     setValidationError(null);
     const submitData = { ...data };
+    if (submitData.scraperType === "sma_browser") {
+      const id = smaSiteIdSchema.safeParse(submitData.siteIdentifier);
+      if (!id.success) {
+        setValidationError(id.error.issues[0].message);
+        return;
+      }
+      submitData.siteIdentifier = id.data;
+      submitData.url = SMA_PORTAL_URL;
+      submitData.apiKey = "";
+    }
     submitData.providerConfig = null;
     submitData.notes = submitData.notes?.trim() ? submitData.notes.trim() : null;
     
@@ -482,6 +503,7 @@ export function AddSiteDialog() {
                   <SelectItem value="mock">Mock (Demo Data)</SelectItem>
                   <SelectItem value="solaredge_api">SolarEdge (API)</SelectItem>
                   <SelectItem value="solaredge_browser">SolarEdge (Browser)</SelectItem>
+                  <SelectItem value="sma_browser">SMA Sunny Portal (Browser)</SelectItem>
                   <SelectItem value="egauge">eGauge</SelectItem>
                   <SelectItem value="alsoenergy">Also Energy PowerTrack</SelectItem>
                 </SelectContent>
@@ -737,6 +759,7 @@ export function AddSiteDialog() {
                   <SelectItem value="mock">Mock (Demo Data)</SelectItem>
                   <SelectItem value="solaredge_api">SolarEdge (API)</SelectItem>
                   <SelectItem value="solaredge_browser">SolarEdge (Browser)</SelectItem>
+                  <SelectItem value="sma_browser">SMA Sunny Portal (Browser)</SelectItem>
                   <SelectItem value="egauge">eGauge</SelectItem>
                   <SelectItem value="alsoenergy">Also Energy PowerTrack</SelectItem>
                 </SelectContent>

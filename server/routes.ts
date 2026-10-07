@@ -1,3 +1,4 @@
+import { validateSmaSite } from "@shared/sma";
 import type { Express, Request } from "express";
 import type { Server } from "http";
 import { buildAlsoEnergyProviderConfig, getPreferredAlsoEnergySiteIdentifier } from "@shared/alsoenergy";
@@ -139,6 +140,7 @@ export async function registerRoutes(
   app.post(api.sites.create.path, async (req, res) => {
     try {
       const input = api.sites.create.input.parse(req.body);
+      validateSmaSite(input);
       const site = await storage.createSite(input);
       res.status(201).json(serializeSite(site));
     } catch (err) {
@@ -161,6 +163,7 @@ export async function registerRoutes(
       if (!existing) return res.status(404).json({ message: "Site not found" });
 
       const mergedInput = mergeSiteUpdate(existing, input);
+      validateSmaSite({ ...existing, ...mergedInput });
       const updated = await storage.updateSite(id, mergedInput);
       res.json(serializeSite(updated));
     } catch (err) {
@@ -633,7 +636,7 @@ function mergeSiteUpdate(existing: Site, input: UpdateSiteRequest): UpdateSiteRe
     return updates;
   }
 
-  if (nextScraperType === "egauge" || nextScraperType === "alsoenergy" || nextScraperType === "solaredge_browser") {
+  if (nextScraperType === "egauge" || nextScraperType === "alsoenergy" || nextScraperType === "solaredge_browser" || nextScraperType === "sma_browser") {
     clearBlankSecret(updates, "username");
     clearBlankSecret(updates, "password");
     updates.apiKey = "";

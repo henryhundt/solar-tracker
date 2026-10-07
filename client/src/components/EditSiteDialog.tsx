@@ -1,3 +1,4 @@
+import { SMA_PORTAL_URL, SMA_SITE_HELP, smaSiteIdSchema } from "@shared/sma";
 import type { ReactNode } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -137,7 +138,11 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
     setSelectedEGaugeRegisterIds(new Set());
     setEGaugeSelectionMode("manual");
     setEGaugeInspectError(null);
-    if (val === "egauge") {
+    if (val === "sma_browser") {
+      setValue("url", SMA_PORTAL_URL);
+      setValue("apiKey", "");
+      setValue("siteIdentifier", "");
+    } else if (val === "egauge") {
       setCredentialMode("direct");
       setValue("apiKey", "");
       setValue("siteIdentifier", "");
@@ -151,7 +156,9 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
   const needsCredentials = currentScraperType !== "solaredge_api";
   const needsApiKey = currentScraperType === "solaredge_api";
   const showSiteIdentifierField = currentScraperType !== "egauge";
-  const siteIdentifierLabel = currentScraperType === "solaredge_api" 
+  const siteIdentifierLabel = currentScraperType === "sma_browser"
+    ? "SMA System ID"
+    : currentScraperType === "solaredge_api"
     ? "Site ID (from SolarEdge portal URL)"
     : currentScraperType === "alsoenergy"
     ? "Also Energy PowerTrack Site Key"
@@ -275,6 +282,16 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
   const onSubmit = (data: FormValues) => {
     setValidationError(null);
     const submitData: Partial<FormValues> = { ...data };
+    if (submitData.scraperType === "sma_browser") {
+      const id = smaSiteIdSchema.safeParse(submitData.siteIdentifier);
+      if (!id.success) {
+        setValidationError(id.error.issues[0].message);
+        return;
+      }
+      submitData.siteIdentifier = id.data;
+      submitData.url = SMA_PORTAL_URL;
+      submitData.apiKey = "";
+    }
     submitData.providerConfig = null;
     submitData.notes = submitData.notes?.trim() ? submitData.notes.trim() : null;
     
@@ -498,6 +515,7 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
                 <SelectItem value="mock">Mock (Demo Data)</SelectItem>
                 <SelectItem value="solaredge_api">SolarEdge (API)</SelectItem>
                 <SelectItem value="solaredge_browser">SolarEdge (Browser)</SelectItem>
+                <SelectItem value="sma_browser">SMA Sunny Portal (Browser)</SelectItem>
                 <SelectItem value="egauge">eGauge</SelectItem>
                 <SelectItem value="alsoenergy">Also Energy PowerTrack</SelectItem>
               </SelectContent>
@@ -680,13 +698,13 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
               <Label htmlFor="edit-siteIdentifier">{siteIdentifierLabel}</Label>
               <Input 
                 id="edit-siteIdentifier" 
-                placeholder={currentScraperType === "solaredge_api" ? "e.g. 1234567" : currentScraperType === "alsoenergy" ? "e.g. S41121" : "e.g. Main Building"} 
+                placeholder={currentScraperType === "sma_browser" ? "e.g. 12345678" : currentScraperType === "solaredge_api" ? "e.g. 1234567" : currentScraperType === "alsoenergy" ? "e.g. S41121" : "e.g. Main Building"}
                 {...register("siteIdentifier")} 
                 className="rounded-xl"
                 data-testid="input-edit-site-identifier"
               />
               <p className="text-xs text-muted-foreground">
-                {currentScraperType === "solaredge_api" 
+                {currentScraperType === "sma_browser" ? SMA_SITE_HELP : currentScraperType === "solaredge_api"
                   ? "The numeric Site ID from your SolarEdge portal URL"
                   : currentScraperType === "alsoenergy"
                   ? "Discover fills a PowerTrack site key like S41121. Keep this even if you later add an API site ID below."
