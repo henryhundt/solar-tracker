@@ -29,6 +29,25 @@ type FormValues = z.infer<typeof formSchema>;
 
 type CredentialMode = "direct" | "secret";
 
+const US_TIMEZONES = [
+  { value: "America/New_York", label: "Eastern Time" },
+  { value: "America/Chicago", label: "Central Time" },
+  { value: "America/Denver", label: "Mountain Time" },
+  { value: "America/Phoenix", label: "Arizona (no daylight saving time)" },
+  { value: "America/Los_Angeles", label: "Pacific Time" },
+  { value: "America/Anchorage", label: "Alaska Time" },
+  { value: "America/Adak", label: "Aleutian Islands Time" },
+  { value: "Pacific/Honolulu", label: "Hawaii Time" },
+  { value: "America/Puerto_Rico", label: "Atlantic Time (Puerto Rico / US Virgin Islands)" },
+  { value: "Pacific/Guam", label: "Chamorro Time (Guam / Northern Mariana Islands)" },
+  { value: "Pacific/Pago_Pago", label: "Samoa Time (American Samoa)" },
+];
+
+const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const defaultTimezone = US_TIMEZONES.some(({ value }) => value === browserTimezone)
+  ? browserTimezone
+  : "America/Chicago";
+
 interface DiscoveredSite {
   siteId: string;
   siteName: string;
@@ -56,7 +75,7 @@ export function AddSiteDialog() {
     defaultValues: {
       name: "",
       url: "",
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Chicago",
+      timezone: defaultTimezone,
       acCapacityKw: null,
       dcCapacityKw: null,
       notes: "",
@@ -679,11 +698,23 @@ export function AddSiteDialog() {
 
             <div className="space-y-2">
               <Label htmlFor="timezone">Site Timezone</Label>
-              <Input id="timezone" placeholder="America/Chicago" {...register("timezone")} className="rounded-xl font-mono" data-testid="input-timezone" />
+              <Select
+                value={watch("timezone") || defaultTimezone}
+                onValueChange={(value) => setValue("timezone", value, { shouldDirty: true, shouldValidate: true })}
+              >
+                <SelectTrigger id="timezone" className="rounded-xl" data-testid="select-timezone">
+                  <SelectValue placeholder="Select a US time zone" />
+                </SelectTrigger>
+                <SelectContent>
+                  {US_TIMEZONES.map(({ value, label }) => (
+                    <SelectItem key={value} value={value}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {errors.timezone ? (
                 <span className="text-xs text-red-500">{errors.timezone.message}</span>
               ) : (
-                <p className="text-xs text-muted-foreground">Use an IANA timezone so daily totals follow the site’s local day.</p>
+                <p className="text-xs text-muted-foreground">Choose the site’s local US time zone so daily totals follow its local day.</p>
               )}
             </div>
 
