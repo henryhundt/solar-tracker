@@ -7,6 +7,7 @@ import { z } from "zod";
 export const SCRAPER_TYPES = [
   "solaredge_api",
   "solaredge_browser",
+  "sma_browser",
   "egauge",
   "alsoenergy",
   "mock",
@@ -26,6 +27,7 @@ export type SiteStatus = z.infer<typeof siteStatusSchema>;
 // - 'solaredge_browser': SolarEdge browser automation (needs username/password + siteIdentifier as site name)
 // - 'egauge': eGauge device URL (JSON WebAPI with optional username/password, plus legacy XML fallback)
 // - 'alsoenergy': Also Energy PowerTrack (numeric API site ID for REST API, or S-prefixed PowerTrack key for browser automation)
+// - 'sma_browser': SMA Sunny Portal ennexOS daily energy table (SMA ID credentials + numeric system ID)
 // - 'mock': Mock data for testing
 export const sites = pgTable("sites", {
   id: serial("id").primaryKey(),

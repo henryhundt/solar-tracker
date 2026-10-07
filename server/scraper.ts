@@ -1,3 +1,4 @@
+import { scrapeSmaBrowser } from "./scrapers/sma-browser";
 import type { Site } from "@shared/schema";
 import { getAlsoEnergyApiSiteId, getAlsoEnergyBrowserSiteKey } from "@shared/alsoenergy";
 import { buildIncrementalHistoryWindow, getHourlyHistoryCutoff } from "./history";
@@ -89,6 +90,11 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
           throw new Error("SolarEdge Browser automation requires username and password");
         }
         readings = await scrapeSolarEdgeBrowser(currentSite, username, password, historyWindow);
+        break;
+
+      case "sma_browser":
+        if (!username || !password) throw new Error("SMA requires SMA ID username and password.");
+        readings = await scrapeSmaBrowser(currentSite, username, password, historyWindow);
         break;
 
       case "alsoenergy":

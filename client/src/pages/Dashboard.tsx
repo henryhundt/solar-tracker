@@ -60,6 +60,7 @@ function isUsableUrl(url: string) {
 function formatScraperLabel(scraperType: string) {
   const labels: Record<string, string> = {
     alsoenergy: "AlsoEnergy",
+    sma_browser: "SMA Sunny Portal",
     egauge: "eGauge",
     mock: "Mock",
     solaredge_api: "SolarEdge API",
