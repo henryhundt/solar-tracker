@@ -75,12 +75,12 @@ test("SMA failed login never includes credentials or OAuth query in errors", asy
   } finally { await context.close(); }
 });
 
-test("SMA waits for stale rows to change when moving between months", async () => {
+test("SMA reads controls outside a main landmark and waits for month updates", async () => {
   const context = await browser.newContext();
   await context.route("**/*", route => route.abort());
   try {
     const page = await context.newPage();
-    await page.setContent(chart.replace('<div role="combobox" aria-disabled="true">September</div>', `
+    await page.setContent(chart.replace('<main>', '<div>').replace('</main>', '</div>').replace('<div role="combobox" aria-disabled="true">September</div>', `
       <div role="combobox" id="monthControl" tabindex="0" onclick="document.getElementById('months').hidden=false" onkeydown="if(event.key==='Escape')document.getElementById('months').hidden=true">September</div>
       <div id="months" hidden>
         <div role="option" onclick="pickMonth('August')">August</div>

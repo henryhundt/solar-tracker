@@ -69,19 +69,19 @@ async function selectChoice(page: Page, control: Locator, label: string): Promis
   await control.click();
   await page.getByRole("option", { name: label, exact: true }).click();
   await page.waitForFunction(({ index, expected }) => {
-    const controls = document.querySelectorAll('main [role="combobox"]');
+    const controls = document.querySelectorAll('[role="combobox"]');
     return controls[index]?.textContent?.trim() === expected;
   }, { index: /^\d{4}$/.test(label) ? 2 : 1, expected: label });
 }
 
 export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "timezone">, window: HistoryWindow): Promise<SmaReading[]> {
-  const main = page.getByRole("main");
-  const resolution = main.getByRole("combobox").nth(0);
+  // Sunny Portal renders the chart in a generic container, without a main landmark.
+  const resolution = page.getByRole("combobox").nth(0);
   await resolution.click();
   await page.getByRole("option", { name: "Month", exact: true }).click();
   const details = page.getByRole("button", { name: "Details", exact: true });
   if (await details.getAttribute("aria-expanded") !== "true") await details.click();
-  const controls = main.getByRole("combobox");
+  const controls = page.getByRole("combobox");
   await controls.nth(2).waitFor();
   // Date controls can appear before the initial power-to-energy transition
   // finishes. Do not start another chart request during that transition.

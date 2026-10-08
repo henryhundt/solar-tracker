@@ -86,11 +86,11 @@ export function AddSiteDialog() {
       credentialKey: "",
       siteIdentifier: "",
       providerConfig: null,
-      scraperType: "mock",
+      scraperType: "solaredge_api",
     }
   });
 
-  const scraperType = watch("scraperType") || "mock";
+  const scraperType = watch("scraperType") || "solaredge_api";
   const isAlsoEnergy = scraperType === "alsoenergy";
   const isSolarEdgeApi = scraperType === "solaredge_api";
   const isSolarEdgeBrowser = scraperType === "solaredge_browser";
@@ -519,7 +519,6 @@ export function AddSiteDialog() {
                   <SelectValue placeholder="Select type" />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl">
-                  <SelectItem value="mock">Mock (Demo Data)</SelectItem>
                   <SelectItem value="solaredge_api">SolarEdge (API)</SelectItem>
                   <SelectItem value="solaredge_browser">SolarEdge (Browser)</SelectItem>
                   <SelectItem value="sma_browser">SMA Sunny Portal (Browser)</SelectItem>
@@ -782,12 +781,11 @@ export function AddSiteDialog() {
 
             <div className="space-y-2">
               <Label>Scraper Type</Label>
-              <Select onValueChange={handleScraperTypeChange} defaultValue="mock">
+              <Select onValueChange={handleScraperTypeChange} value={scraperType}>
                 <SelectTrigger className="rounded-xl" data-testid="select-scraper-type">
                   <SelectValue placeholder="Select type" />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl">
-                  <SelectItem value="mock">Mock (Demo Data)</SelectItem>
                   <SelectItem value="solaredge_api">SolarEdge (API)</SelectItem>
                   <SelectItem value="solaredge_browser">SolarEdge (Browser)</SelectItem>
                   <SelectItem value="sma_browser">SMA Sunny Portal (Browser)</SelectItem>

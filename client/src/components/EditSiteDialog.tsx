@@ -512,7 +512,6 @@ export function EditSiteDialog({ site, trigger }: EditSiteDialogProps) {
                 <SelectValue placeholder="Select type" />
               </SelectTrigger>
               <SelectContent className="rounded-xl">
-                <SelectItem value="mock">Mock (Demo Data)</SelectItem>
                 <SelectItem value="solaredge_api">SolarEdge (API)</SelectItem>
                 <SelectItem value="solaredge_browser">SolarEdge (Browser)</SelectItem>
                 <SelectItem value="sma_browser">SMA Sunny Portal (Browser)</SelectItem>
