@@ -42,10 +42,15 @@ export async function scrapeSmaBrowser(site: Site, username: string, password: s
     const context = await browser.newContext({ locale: "en-US", timezoneId: site.timezone, viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
-    const network = { failedRequests: 0, httpErrors: {} as Record<string, number>, pageErrors: 0 };
+    const network = { failedRequests: 0, httpErrors: {} as Record<string, number>, pageErrors: 0, failureKinds: {} as Record<string, number> };
     await loginSma(page, username, password);
     // Counts only: never capture response bodies, credentials, or OAuth URLs.
-    page.on("requestfailed", () => { network.failedRequests++; });
+    page.on("requestfailed", request => {
+      network.failedRequests++;
+      const raw = request.failure()?.errorText || "";
+      const kind = /^net::ERR_[A-Z_]+$/.test(raw) ? raw : "other";
+      network.failureKinds[kind] = (network.failureKinds[kind] || 0) + 1;
+    });
     page.on("response", response => {
       if (response.status() >= 400) {
         const key = String(response.status());
@@ -59,6 +64,7 @@ export async function scrapeSmaBrowser(site: Site, username: string, password: s
       throw new Error("SMA redirected to a different system; check the system ID and account access.");
     }
     try {
+      await waitForSmaChart(page, id);
       return await readSmaDailyHistory(page, site, window);
     } catch {
       const diagnostics = await collectSmaDiagnostics(page).catch(() => ({ unavailable: true }));
@@ -66,6 +72,26 @@ export async function scrapeSmaBrowser(site: Site, username: string, password: s
     }
   } finally {
     await browser.close();
+  }
+}
+
+// The page heading belongs to the application shell, not the async chart.
+// Recover once from a stalled initial load, before reading any measurements.
+export async function waitForSmaChart(page: Page, systemId: string, timeoutMs = 30_000): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const url = new URL(page.url());
+    if (url.origin !== new URL(SMA_PORTAL_URL).origin || url.pathname !== `/${systemId}/monitoring/view-energy-and-power`) {
+      throw new Error("SMA left the requested system page; check session and system access.");
+    }
+    const rejectCookies = page.getByRole("button", { name: "Reject all", exact: true });
+    if (await rejectCookies.isVisible()) await rejectCookies.click();
+    try {
+      await page.getByRole("combobox").first().waitFor({ state: "visible", timeout: timeoutMs });
+      return;
+    } catch {
+      if (attempt === 1) throw new Error("SMA chart did not initialize after one reload.");
+      await page.reload({ waitUntil: "domcontentloaded" });
+    }
   }
 }
 
@@ -217,6 +243,10 @@ export async function collectSmaDiagnostics(page: Page) {
         disabled: element.getAttribute("aria-disabled") === "true",
       })),
       dialogs: document.querySelectorAll('[role="dialog"], [aria-modal="true"]').length,
+      visibleDialogs: Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).filter(element => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== "hidden";
+      }).length,
       frames: document.querySelectorAll("iframe").length,
       busy: document.querySelectorAll('[aria-busy="true"], [role="progressbar"]').length,
       signals: {
