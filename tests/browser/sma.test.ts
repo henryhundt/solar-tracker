@@ -1,7 +1,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { chromium, type Browser } from "playwright";
-import { collectSmaDiagnostics, loginSma, readSmaDailyHistory } from "../../server/scrapers/sma-browser";
+import { waitForSmaChart, collectSmaDiagnostics, loginSma, readSmaDailyHistory } from "../../server/scrapers/sma-browser";
 
 let browser: Browser;
 before(async () => { browser = await chromium.launch({ headless: true }); });
@@ -115,4 +115,34 @@ test("SMA diagnostics report hidden controls without leaking portal text", async
     assert.equal(diagnostics.dialogs, 1);
     assert.doesNotMatch(JSON.stringify(diagnostics), /private-secret|private-account/);
   } finally { await page.close(); }
+});
+
+for (const recover of [true, false]) {
+  test(`SMA chart readiness reloads once; recovery=${recover}`, async () => {
+    const context = await browser.newContext();
+    let loads = 0;
+    await context.route("**/*", route => {
+      loads++;
+      return route.fulfill({ contentType: "text/html", body: recover && loads === 2
+        ? '<div role="combobox">Day</div>'
+        : '<h1>Energy and power - PV</h1><div role="progressbar"></div>' });
+    });
+    try {
+      const page = await context.newPage();
+      await page.goto("https://ennexos.sunnyportal.com/123/monitoring/view-energy-and-power");
+      if (recover) await waitForSmaChart(page, "123", 300);
+      else await assert.rejects(waitForSmaChart(page, "123", 300), /after one reload/);
+      assert.equal(loads, 2);
+    } finally { await context.close(); }
+  });
+}
+
+test("SMA chart recovery refuses a different system", async () => {
+  const context = await browser.newContext();
+  await context.route("**/*", route => route.fulfill({body: '<div role="combobox">Day</div>'}));
+  try {
+    const page = await context.newPage();
+    await page.goto("https://ennexos.sunnyportal.com/456/monitoring/view-energy-and-power");
+    await assert.rejects(waitForSmaChart(page, "123", 300), /requested system/);
+  } finally { await context.close(); }
 });
