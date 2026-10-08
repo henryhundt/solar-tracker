@@ -42,13 +42,28 @@ export async function scrapeSmaBrowser(site: Site, username: string, password: s
     const context = await browser.newContext({ locale: "en-US", timezoneId: site.timezone, viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
+    const network = { failedRequests: 0, httpErrors: {} as Record<string, number>, pageErrors: 0 };
     await loginSma(page, username, password);
+    // Counts only: never capture response bodies, credentials, or OAuth URLs.
+    page.on("requestfailed", () => { network.failedRequests++; });
+    page.on("response", response => {
+      if (response.status() >= 400) {
+        const key = String(response.status());
+        network.httpErrors[key] = (network.httpErrors[key] || 0) + 1;
+      }
+    });
+    page.on("pageerror", () => { network.pageErrors++; });
     await page.goto(`${SMA_PORTAL_URL}${id}/monitoring/view-energy-and-power`, { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "Energy and power - PV", exact: true }).waitFor();
     if (new URL(page.url()).pathname !== `/${id}/monitoring/view-energy-and-power`) {
       throw new Error("SMA redirected to a different system; check the system ID and account access.");
     }
-    return await readSmaDailyHistory(page, site, window);
+    try {
+      return await readSmaDailyHistory(page, site, window);
+    } catch {
+      const diagnostics = await collectSmaDiagnostics(page).catch(() => ({ unavailable: true }));
+      throw new Error(`SMA chart read failed. Diagnostics: ${JSON.stringify({ ...diagnostics, network })}`);
+    }
   } finally {
     await browser.close();
   }
@@ -176,4 +191,40 @@ function localMidnight(date: string, timeZone: string): Date {
     timestamp += target - represented;
   }
   throw new Error("SMA date cannot be represented at midnight in the configured timezone.");
+}
+
+// Expose only allowlisted labels and structural counts; arbitrary portal text
+// can contain account information, tokens, or credentials.
+export async function collectSmaDiagnostics(page: Page) {
+  const route = new URL(page.url());
+  const location = route.hostname === "ennexos.sunnyportal.com"
+    ? (route.pathname.endsWith("/monitoring/view-energy-and-power") ? "energy-page" : "other-portal-page")
+    : "outside-portal";
+  return { location, ...await page.evaluate(() => {
+    const controls = Array.from(document.querySelectorAll('[role="combobox"]'));
+    const text = document.body.innerText;
+    return {
+      readyState: document.readyState,
+      comboboxes: controls.length,
+      visibleComboboxes: controls.filter(element => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      }).length,
+      controls: controls.slice(0, 8).map(element => ({
+        label: /^(Day|Week|Month|Year|Total)$/.test(element.textContent?.trim() || "") ? element.textContent!.trim() : "redacted",
+        hiddenFromAccessibility: !!element.closest('[aria-hidden="true"], [inert]'),
+        disabled: element.getAttribute("aria-disabled") === "true",
+      })),
+      dialogs: document.querySelectorAll('[role="dialog"], [aria-modal="true"]').length,
+      frames: document.querySelectorAll("iframe").length,
+      busy: document.querySelectorAll('[aria-busy="true"], [role="progressbar"]').length,
+      signals: {
+        noData: /no data available/i.test(text),
+        accessDenied: /access denied|not authorized|permission denied/i.test(text),
+        sessionExpired: /session expired|session has expired/i.test(text),
+        portalError: /something went wrong|temporarily unavailable|error loading/i.test(text),
+      },
+    };
+  }) };
 }

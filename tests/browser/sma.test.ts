@@ -1,7 +1,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { chromium, type Browser } from "playwright";
-import { loginSma, readSmaDailyHistory } from "../../server/scrapers/sma-browser";
+import { collectSmaDiagnostics, loginSma, readSmaDailyHistory } from "../../server/scrapers/sma-browser";
 
 let browser: Browser;
 before(async () => { browser = await chromium.launch({ headless: true }); });
@@ -101,4 +101,18 @@ test("SMA reads controls outside a main landmark and waits for month updates", a
       ["2026-08-31T00:00:00.000Z", 1230], ["2026-09-10T00:00:00.000Z", 4560],
     ]);
   } finally { await context.close(); }
+});
+
+test("SMA diagnostics report hidden controls without leaking portal text", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<div aria-hidden="true"><div role="combobox">Day</div></div><div role="combobox" style="display:none">private-secret</div><div role="dialog">private-account</div><p>No data available</p>');
+    const diagnostics = await collectSmaDiagnostics(page);
+    assert.equal(diagnostics.comboboxes, 2);
+    assert.equal(diagnostics.visibleComboboxes, 1);
+    assert.equal(diagnostics.controls[0].hiddenFromAccessibility, true);
+    assert.equal(diagnostics.signals.noData, true);
+    assert.equal(diagnostics.dialogs, 1);
+    assert.doesNotMatch(JSON.stringify(diagnostics), /private-secret|private-account/);
+  } finally { await page.close(); }
 });
