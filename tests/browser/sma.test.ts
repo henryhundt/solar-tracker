@@ -1,3 +1,4 @@
+import { trackSmaNetwork } from "../../server/scrapers/sma-network";
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { chromium, type Browser } from "playwright";
@@ -145,4 +146,32 @@ test("SMA chart recovery refuses a different system", async () => {
     await page.goto("https://ennexos.sunnyportal.com/456/monitoring/view-energy-and-power");
     await assert.rejects(waitForSmaChart(page, "123", 300), /requested system/);
   } finally { await context.close(); }
+});
+
+test("SMA network diagnostics identify unfinished requests without URL secrets", async () => {
+  const context = await browser.newContext();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await context.route("**/*", async route => {
+    if (route.request().url().includes("private-token")) {
+      await gate;
+      await route.fulfill({ body: "ok" });
+    } else await route.fulfill({ contentType: "text/html", body: '<script>fetch("/private-account?token=private-token")</script>' });
+  });
+  const page = await context.newPage();
+  const tracker = trackSmaNetwork(page);
+  try {
+    const started = page.waitForEvent("request", request => request.resourceType() === "fetch");
+    await page.goto("https://ennexos.sunnyportal.com/");
+    await started;
+    const snapshot = tracker.snapshot();
+    assert.equal(snapshot.pendingCount, 1);
+    assert.equal(snapshot.pending[0].destination, "portal");
+    assert.equal(snapshot.pending[0].type, "fetch");
+    assert.doesNotMatch(JSON.stringify(snapshot), /private-account|private-token/);
+    const completed = page.waitForEvent("requestfinished", request => request.resourceType() === "fetch");
+    release();
+    await completed;
+    assert.equal(tracker.snapshot().pendingCount, 0);
+  } finally { release(); tracker.dispose(); await context.close(); }
 });

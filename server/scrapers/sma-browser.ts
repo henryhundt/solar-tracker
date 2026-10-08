@@ -1,3 +1,4 @@
+import { trackSmaNetwork } from "./sma-network";
 import type { Page, Locator } from "playwright";
 import type { Site } from "@shared/schema";
 import { SMA_PORTAL_URL, smaSiteIdSchema } from "@shared/sma";
@@ -42,22 +43,8 @@ export async function scrapeSmaBrowser(site: Site, username: string, password: s
     const context = await browser.newContext({ locale: "en-US", timezoneId: site.timezone, viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
-    const network = { failedRequests: 0, httpErrors: {} as Record<string, number>, pageErrors: 0, failureKinds: {} as Record<string, number> };
     await loginSma(page, username, password);
-    // Counts only: never capture response bodies, credentials, or OAuth URLs.
-    page.on("requestfailed", request => {
-      network.failedRequests++;
-      const raw = request.failure()?.errorText || "";
-      const kind = /^net::ERR_[A-Z_]+$/.test(raw) ? raw : "other";
-      network.failureKinds[kind] = (network.failureKinds[kind] || 0) + 1;
-    });
-    page.on("response", response => {
-      if (response.status() >= 400) {
-        const key = String(response.status());
-        network.httpErrors[key] = (network.httpErrors[key] || 0) + 1;
-      }
-    });
-    page.on("pageerror", () => { network.pageErrors++; });
+    const network = trackSmaNetwork(page);
     await page.goto(`${SMA_PORTAL_URL}${id}/monitoring/view-energy-and-power`, { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "Energy and power - PV", exact: true }).waitFor();
     if (new URL(page.url()).pathname !== `/${id}/monitoring/view-energy-and-power`) {
@@ -68,7 +55,7 @@ export async function scrapeSmaBrowser(site: Site, username: string, password: s
       return await readSmaDailyHistory(page, site, window);
     } catch {
       const diagnostics = await collectSmaDiagnostics(page).catch(() => ({ unavailable: true }));
-      throw new Error(`SMA chart read failed. Diagnostics: ${JSON.stringify({ ...diagnostics, network })}`);
+      throw new Error(`SMA chart read failed. Diagnostics: ${JSON.stringify({ ...diagnostics, network: network.snapshot() })}`);
     }
   } finally {
     await browser.close();
