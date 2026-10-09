@@ -175,3 +175,18 @@ test("SMA network diagnostics identify unfinished requests without URL secrets",
     assert.equal(tracker.snapshot().pendingCount, 0);
   } finally { release(); tracker.dispose(); await context.close(); }
 });
+
+test("SMA desktop tabs read month/year controls without a resolution dropdown", async () => {
+  const page = await browser.newPage();
+  try {
+    const desktop = chart.replace(/<div role="combobox" id="resolution"[^\n]+\n/, '')
+      .replace(/<div id="monthOption"[^\n]+\n/, '<button role="tab" onclick="setTimeout(showEnergy,200)">Month</button>\n')
+      .replace('<div role="combobox" aria-disabled="true">September</div>', `<div role="combobox" tabindex="0" onclick="this.innerHTML='September &lt;span role=option&gt;September&lt;/span&gt;'" onkeydown="if(event.key==='Escape')this.textContent='September'">September</div>`);
+    await page.setContent(desktop);
+    const rows = await readSmaDailyHistory(page, {id:7,timezone:"UTC"}, {
+      start:new Date("2026-09-09T00:00:00Z"),end:new Date("2026-09-10T23:59:00Z"),
+    });
+    assert.equal(rows.length,2);
+    assert.equal(rows[0].energyWh,3193660);
+  } finally {await page.close();}
+});
