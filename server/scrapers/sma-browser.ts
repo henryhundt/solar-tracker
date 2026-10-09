@@ -73,7 +73,7 @@ export async function waitForSmaChart(page: Page, systemId: string, timeoutMs = 
     const rejectCookies = page.getByRole("button", { name: "Reject all", exact: true });
     if (await rejectCookies.isVisible()) await rejectCookies.click();
     try {
-      await page.getByRole("combobox").first().waitFor({ state: "visible", timeout: timeoutMs });
+      await page.getByRole("tab", { name: "Month", exact: true }).or(page.getByRole("combobox").filter({ hasText: /^(Day|Week|Month|Year|Total)$/ })).first().waitFor({ state: "visible", timeout: timeoutMs });
       return;
     } catch {
       if (attempt === 1) throw new Error("SMA chart did not initialize after one reload.");
@@ -96,21 +96,30 @@ async function selectChoice(page: Page, control: Locator, label: string): Promis
   if ((await control.innerText()).trim() === label) return;
   await control.click();
   await page.getByRole("option", { name: label, exact: true }).click();
-  await page.waitForFunction(({ index, expected }) => {
-    const controls = document.querySelectorAll('[role="combobox"]');
-    return controls[index]?.textContent?.trim() === expected;
-  }, { index: /^\d{4}$/.test(label) ? 2 : 1, expected: label });
+  await control.filter({ hasText: new RegExp(`^${label}$`) }).waitFor({ state: "visible" });
 }
 
 export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "timezone">, window: HistoryWindow): Promise<SmaReading[]> {
-  // Sunny Portal renders the chart in a generic container, without a main landmark.
-  const resolution = page.getByRole("combobox").nth(0);
-  await resolution.click();
-  await page.getByRole("option", { name: "Month", exact: true }).click();
+  // Desktop uses tabs; compact layouts use a resolution dropdown.
+  const monthTab = page.getByRole("tab", { name: "Month", exact: true });
+  const resolution = page.getByRole("combobox").filter({ hasText: /^(Day|Week|Month|Year|Total)$/ });
+  await monthTab.or(resolution).first().waitFor();
+  const desktop = await monthTab.isVisible();
+  if (desktop) {
+    await monthTab.click();
+  } else {
+    await resolution.click();
+    await page.getByRole("option", { name: "Month", exact: true }).click();
+  }
   const details = page.getByRole("button", { name: "Details", exact: true });
   if (await details.getAttribute("aria-expanded") !== "true") await details.click();
+  // Date controls shift index when the resolution dropdown is absent.
+  // Keep these locators stable while open options become part of the
+  // combobox's text. Filtering by selected text would lose the open control.
   const controls = page.getByRole("combobox");
-  await controls.nth(2).waitFor();
+  const monthControl = controls.nth(desktop ? 0 : 1);
+  const yearControl = controls.nth(desktop ? 1 : 2);
+  await yearControl.waitFor();
   // Date controls can appear before the initial power-to-energy transition
   // finishes. Do not start another chart request during that transition.
   await page.getByRole("region", { name: "Details", exact: true })
@@ -118,16 +127,16 @@ export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "t
   const startDate = calendarDate(window.start, site.timezone);
   const endDate = calendarDate(window.end, site.timezone);
   const result: SmaReading[] = [];
-  const years = await choices(page, controls.nth(2));
+  const years = await choices(page, yearControl);
   if (!years.length || years.some(year => !/^\d{4}$/.test(year))) throw new Error("SMA year selector changed; expected English month/year controls.");
   for (const year of years.filter(year => +year >= +startDate.slice(0, 4) && +year <= +endDate.slice(0, 4)).sort()) {
-    await selectChoice(page, controls.nth(2), year);
-    const months = await choices(page, controls.nth(1));
+    await selectChoice(page, yearControl, year);
+    const months = await choices(page, monthControl);
     if (!months.length || months.some(month => !MONTHS.includes(month))) throw new Error("SMA month selector changed; use English portal language.");
     for (const month of months) {
       const monthKey = `${year}-${String(MONTHS.indexOf(month) + 1).padStart(2, "0")}`;
       if (monthKey < startDate.slice(0, 7) || monthKey > endDate.slice(0, 7)) continue;
-      await selectChoice(page, controls.nth(1), month);
+      await selectChoice(page, monthControl, month);
       // SMA retains the previous table during async chart updates, even after
       // the date selector changes. Require energy units and matching row dates.
       await page.waitForFunction(({ month, year }) => {
