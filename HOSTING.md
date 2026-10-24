@@ -74,3 +74,21 @@ Reference: [Render Free limitations](https://render.com/docs/free) and [Render s
 ## Why not Vercel or Netlify?
 
 The app depends on long-running Playwright/Chromium work and coordinated scheduled jobs. A container service with a terminating cron process maps cleanly to those requirements.
+
+## October 2026 Railway incident follow-up
+
+Railway recommends rotating sensitive variables stored before the incident and revoking the old credentials at their providers. Rotations completed after containment do not need repeating solely because of the October 23 update. Reference: [Railway preliminary report](https://blog.railway.com/p/preliminary-report-october-security-incident).
+
+Production variable names reviewed on October 23 (values were kept masked):
+
+- Web: `ADMIN_PASSWORD`, `SESSION_SECRET`, `CRON_SECRET`, `DATABASE_URL`, `CREDENTIAL_ENCRYPTION_KEY`.
+- Scheduled sync: `DATABASE_URL`, `CREDENTIAL_ENCRYPTION_KEY`.
+- No AI API key variables were present in either service's visible variable inventory. Provider login credentials can still be stored encrypted in PostgreSQL.
+
+Coordinate database credential replacement across both services and any local or backup clients, then revoke the old database credential. Rotate the admin password, session secret, and cron secret, including the GitHub Actions fallback secret if used; redeploy affected services. Rotating the session secret invalidates existing signed sessions.
+
+Do not simply replace `CREDENTIAL_ENCRYPTION_KEY`: startup validates existing ciphertext and fails if the key no longer decrypts it. Back up the database, decrypt and re-encrypt stored provider credentials with the replacement key in a coordinated maintenance operation, update both services, and verify synchronization before retiring the old key. If the database and its encryption key may both have been exposed, also replace the upstream provider credentials.
+
+The Railway project has a web service and scheduled sync service; no Railway-hosted database service was visible. Review network exposure and access logs with the actual PostgreSQL provider. Review GitHub security/audit logs and installed app access separately; a running application or a low-risk workspace notification does not establish that credentials were never accessed.
+
+The October 23 failed scheduled execution showed SolarEdge's retired `/solaredge-web/p/login` returning HTTP 410 before credential submission. The scraper now starts at `https://monitoring.solaredge.com`, which redirects to the current authentication UI. The sync command intentionally returns a failing exit status when any site fails; Railway can label this a crash while the web service remains online. Verify a complete scheduled run after deploying the fix, including any other provider failures.

@@ -60,23 +60,10 @@ export function log(message: string, source = "express") {
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: unknown;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse !== undefined) {
-        logLine += ` :: ${JSON.stringify(compactLogPayload(redactSensitiveData(capturedJsonResponse)))}`;
-      }
-
-      log(logLine);
+      log(`${req.method} ${path} ${res.statusCode} in ${duration}ms`);
     }
   });
 
@@ -180,46 +167,6 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
-
-function redactSensitiveData(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => redactSensitiveData(item));
-  }
-
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  const sensitiveKeys = new Set(["username", "password", "apiKey", "authorization", "cookie"]);
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entryValue]) => [
-      key,
-      sensitiveKeys.has(key) ? "[REDACTED]" : redactSensitiveData(entryValue),
-    ]),
-  );
-}
-
-function compactLogPayload(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    const preview = value.slice(0, 5).map((item) => compactLogPayload(item));
-    if (value.length > 5) {
-      preview.push({ __truncatedItems: value.length - 5 });
-    }
-    return preview;
-  }
-
-  if (typeof value === "string") {
-    return value.length > 200 ? `${value.slice(0, 200)}...` : value;
-  }
-
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entryValue]) => [key, compactLogPayload(entryValue)]),
-  );
-}
 
 function parsePositiveNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value);

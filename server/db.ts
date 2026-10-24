@@ -10,5 +10,14 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  connectionTimeoutMillis: 10_000,
+});
+
+// Idle connections can fail during database restarts or credential rotation.
+// Register this for every entry point, including migrations and standalone syncs.
+pool.on("error", (error) => {
+  console.error("Database pool connection failed:", { code: (error as Error & { code?: string }).code });
+});
 export const db = drizzle(pool, { schema });

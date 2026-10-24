@@ -79,8 +79,8 @@ export async function registerRoutes(
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join("."),
+          message: err.issues[0].message,
+          field: err.issues[0].path.join("."),
         });
       }
 
@@ -146,8 +146,8 @@ export async function registerRoutes(
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
+          message: err.issues[0].message,
+          field: err.issues[0].path.join('.'),
         });
       }
       throw err;
@@ -169,8 +169,8 @@ export async function registerRoutes(
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
+          message: err.issues[0].message,
+          field: err.issues[0].path.join('.'),
         });
       }
       throw err;
@@ -268,7 +268,7 @@ export async function registerRoutes(
       res.json(readings.map(serializeReading));
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ message: err.errors[0].message });
+        return res.status(400).json({ message: err.issues[0].message });
       }
       if (err instanceof RequestValidationError) {
         return res.status(400).json({ message: err.message });
@@ -373,7 +373,7 @@ export async function registerRoutes(
       res.json({ sites });
     } catch (error: any) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message });
+        return res.status(400).json({ message: error.issues[0].message });
       }
       console.error("[AlsoEnergy] Discovery error:", error);
       res.status(500).json({ message: error.message || "Failed to discover sites" });
@@ -427,7 +427,7 @@ export async function registerRoutes(
       res.status(201).json({ created: created.map(serializeSite), count: created.length });
     } catch (error: any) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message });
+        return res.status(400).json({ message: error.issues[0].message });
       }
       console.error("[AlsoEnergy] Bulk add error:", error);
       res.status(500).json({ message: error.message || "Failed to add sites" });
@@ -467,7 +467,7 @@ export async function registerRoutes(
       res.json({ sites });
     } catch (error: any) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message });
+        return res.status(400).json({ message: error.issues[0].message });
       }
       console.error("[SolarEdge] Discovery error:", error);
       res.status(500).json({ message: error.message || "Failed to discover sites" });
@@ -518,7 +518,7 @@ export async function registerRoutes(
       res.status(201).json({ created: created.map(serializeSite), count: created.length });
     } catch (error: any) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: error.errors[0].message });
+        return res.status(400).json({ message: error.issues[0].message });
       }
       console.error("[SolarEdge] Bulk add error:", error);
       res.status(500).json({ message: error.message || "Failed to add sites" });
@@ -548,7 +548,7 @@ export async function registerRoutes(
       return res.json({ success: true, registers });
     } catch (err: any) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ success: false, error: err.errors[0].message });
+        return res.status(400).json({ success: false, error: err.issues[0].message });
       }
 
       const message = err?.message || "Unexpected error";
