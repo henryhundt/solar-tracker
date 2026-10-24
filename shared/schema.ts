@@ -83,6 +83,7 @@ export const insertSiteSchema = createInsertSchema(sites, {
   url: z.string().trim().max(2048),
   timezone: z.string().trim().min(1).max(100).refine(isValidTimeZone, "Timezone must be a valid IANA timezone").optional(),
   scraperType: scraperTypeSchema,
+  providerConfig: z.record(z.string(), z.unknown()).nullable().optional(),
   credentialKey: z.string().trim().max(100).regex(
     /^[A-Z][A-Z0-9_]*$/,
     "Credential key must contain only uppercase letters, numbers, and underscores",

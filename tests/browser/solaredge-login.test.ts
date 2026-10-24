@@ -40,7 +40,7 @@ async function withFixture(fixture: Fixture, run: (page: Page) => Promise<void>)
       return;
     }
     const bodies: Record<string, string | undefined> = {
-      [`${MONITORING}/solaredge-web/p/login`]: fixture.start,
+      [`${MONITORING}/`]: fixture.start,
       [`${MONITORING}/mfe/auth/`]: fixture.welcome,
       "https://login.solaredge.com/login": fixture.signIn,
       [`${MONITORING}/mfe/auth/callback`]: `<script>setTimeout(() => location.href = '/one#/site-list', 250)</script>`,

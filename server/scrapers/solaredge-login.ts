@@ -64,7 +64,9 @@ export async function loginSolarEdge(
 
   try {
     console.log("[SolarEdge Browser] Navigating to login page...");
-    await page.goto(`${MONITORING_ORIGIN}/solaredge-web/p/login`, {
+    // The retired legacy login endpoint returns HTTP 410. Let the provider
+    // redirect its public entry point to the current authentication UI.
+    await page.goto(MONITORING_ORIGIN, {
       waitUntil: "domcontentloaded",
       timeout: remaining(),
     });

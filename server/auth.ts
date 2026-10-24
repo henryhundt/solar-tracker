@@ -171,10 +171,6 @@ async function createSessionStore(
 
   if (databaseUrl) {
     const PGStore = connectPgSimple(session);
-    databasePool.on("error", (error) => {
-      console.error("Session store pool error:", error);
-    });
-
     await ensurePostgresSessionTable(databasePool);
 
     return new PGStore({
