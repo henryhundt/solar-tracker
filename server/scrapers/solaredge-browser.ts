@@ -1,7 +1,8 @@
 import type { Site } from "@shared/schema";
 import type { HistoryWindow } from "../history";
-import type { APIRequestContext, Browser, Page } from "playwright";
+import type { Browser, Page } from "playwright";
 import { launchScraperChromium } from "./playwright";
+import { solarEdgeSessionRequest, type SolarEdgeRequest } from "./solaredge-session";
 import { loginSolarEdge } from "./solaredge-login";
 import type { SolarEdgeDiscoveredSite } from "./solaredge-api";
 
@@ -71,7 +72,7 @@ export async function scrapeSolarEdgeBrowser(
     // Only timestamped provider measurements are valid readings. Never infer
     // daily production from unrelated numbers in rendered dashboard text.
     const readings = await extractEnergyDataFromDashboardApis(
-      page.context().request, site, browserSite.siteId, historyWindow,
+      await solarEdgeSessionRequest(page), site, browserSite.siteId, historyWindow,
     );
 
     const filteredReadings = filterReadingsToWindow(readings, historyWindow);
@@ -117,7 +118,6 @@ export async function discoverSolarEdgeBrowserSites(
     const page = await context.newPage();
 
     await loginSolarEdge(page, username, password);
-    await page.waitForTimeout(3000);
 
     const apiSites = await fetchSolarEdgeBrowserSites(page);
     if (apiSites.length > 0) {
@@ -192,13 +192,14 @@ async function resolveSolarEdgeBrowserSite(
 }
 
 async function fetchSolarEdgeBrowserSites(page: Page): Promise<SolarEdgeDiscoveredSite[]> {
+  const request = await solarEdgeSessionRequest(page);
   const discoveredSites: SolarEdgeDiscoveredSite[] = [];
   const seenSiteIds = new Set<string>();
   let pageNum = 1;
   let totalSites = Number.POSITIVE_INFINITY;
 
   while (discoveredSites.length < totalSites) {
-    const response = await fetchSolarEdgeBrowserSearchPage(page.context().request, pageNum);
+    const response = await fetchSolarEdgeBrowserSearchPage(request, pageNum);
     const sites = response.page ?? [];
     totalSites = response.totalSitesInSearch ?? sites.length;
 
@@ -230,7 +231,7 @@ async function fetchSolarEdgeBrowserSites(page: Page): Promise<SolarEdgeDiscover
 }
 
 async function fetchSolarEdgeBrowserSearchPage(
-  request: APIRequestContext,
+  request: SolarEdgeRequest,
   pageNum: number
 ): Promise<SolarEdgeSiteSearchResponse> {
   const response = await request.post(
@@ -280,15 +281,14 @@ async function fetchSolarEdgeBrowserSearchPage(
   );
 
   if (!response.ok()) {
-    const errorText = await response.text();
-    throw new Error(`SolarEdge site search failed (${response.status()}): ${errorText.slice(0, 400)}`);
+    throw new Error(`SolarEdge site search failed (HTTP ${response.status()}).`);
   }
 
   return response.json();
 }
 
 export async function extractEnergyDataFromDashboardApis(
-  request: APIRequestContext,
+  request: SolarEdgeRequest,
   site: Site,
   solarEdgeSiteId: string,
   historyWindow?: HistoryWindow
@@ -343,7 +343,7 @@ export async function extractEnergyDataFromDashboardApis(
 }
 
 async function fetchSolarEdgeDailyDashboardReadings(
-  request: APIRequestContext,
+  request: SolarEdgeRequest,
   dbSiteId: number,
   solarEdgeSiteId: string,
   start: Date,
@@ -385,7 +385,7 @@ async function fetchSolarEdgeDailyDashboardReadings(
 }
 
 async function fetchSolarEdgeQuarterHourDashboardReadings(
-  request: APIRequestContext,
+  request: SolarEdgeRequest,
   dbSiteId: number,
   solarEdgeSiteId: string,
   start: Date,
