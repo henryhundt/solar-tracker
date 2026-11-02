@@ -190,3 +190,93 @@ test("SMA desktop tabs read month/year controls without a resolution dropdown", 
     assert.equal(rows[0].energyWh,3193660);
   } finally {await page.close();}
 });
+
+// Month rollover: the default month has no production yet, but the previous
+// month's data must still be fetched. Freeze the browser and Node month to the
+// current calendar month by constructing the fixture dynamically.
+test("SMA empty current month does not block historical readings", async () => {
+  const page = await browser.newPage();
+  const now = new Date();
+  const currentYear = now.getUTCFullYear();
+  const currentMonth = now.toLocaleString('en-US', {month:'long',timeZone:'UTC'});
+  const previous = new Date(Date.UTC(currentYear, now.getUTCMonth() - 1, 1));
+  const previousMonth = previous.toLocaleString('en-US', {month:'long',timeZone:'UTC'});
+  const previousYear = previous.getUTCFullYear();
+  const date = `${String(previous.getUTCMonth()+1).padStart(2,'0')}/01/${previousYear}`;
+  try {
+    await page.setContent(`
+      <button role="tab">Month</button>
+      <div role="combobox" id="month" tabindex="0" onclick="months.hidden=false" onkeydown="if(event.key==='Escape')months.hidden=true">${currentMonth}</div>
+      <div role="combobox" id="year" tabindex="0" onclick="years.hidden=false" onkeydown="if(event.key==='Escape')years.hidden=true">${currentYear}</div>
+      <div id="months" hidden>${[...new Set([previousMonth,currentMonth])].map(m=>`<div role="option" onclick="selectMonth('${m}')">${m}</div>`).join('')}</div>
+      <div id="years" hidden>${[...new Set([previousYear,currentYear])].map(y=>`<div role="option" onclick="year.textContent='${y}';years.hidden=true">${y}</div>`).join('')}</div>
+      <button aria-expanded="true">Details</button>
+      <div role="region" aria-label="Details" id="details">No data available</div>
+      <script>
+      function selectMonth(value) {
+        month.textContent=value;months.hidden=true;
+        details.setAttribute('aria-busy','true');
+        setTimeout(()=>{
+          details.innerHTML=value==='${previousMonth}'
+            ? '<table><tr><th>Total yield [kWh]</th></tr><tr><td>${date}</td><td>2.5</td></tr></table>'
+            : 'No data available';
+          details.removeAttribute('aria-busy');
+        },100);
+      }
+      </script>`);
+    const rows = await readSmaDailyHistory(page, {id:7,timezone:'UTC'}, {start:previous,end:now}, 1500);
+    assert.equal(rows.length,1);
+    assert.equal(rows[0].energyWh,2500);
+    assert.equal(rows[0].timestamp.toISOString(),previous.toISOString());
+  } finally { await page.close(); }
+});
+
+for (const recover of [true, false]) {
+  test(`SMA stalled energy transition retries once and then recovery=${recover}`, async () => {
+    const { readSmaHistoryWithRecovery } = await import('../../server/scrapers/sma-browser');
+    const context = await browser.newContext();
+    let loads = 0;
+    await context.route('**/*', route => {
+      loads++;
+      return route.fulfill({contentType:'text/html',body:recover && loads === 2 ? chart : chart.replace('setTimeout(showEnergy,200)','void 0')});
+    });
+    try {
+      const page = await context.newPage();
+      await page.goto('https://ennexos.sunnyportal.com/123/monitoring/view-energy-and-power');
+      const result = readSmaHistoryWithRecovery(page,{id:7,timezone:'UTC'}, {
+        start:new Date('2026-09-09T00:00:00Z'),end:new Date('2026-09-10T23:59:00Z'),
+      },'123',800);
+      if(recover) assert.equal((await result).length,2);
+      else await assert.rejects(result,{name:'TimeoutError'});
+      assert.equal(loads,2);
+    } finally {await context.close();}
+  });
+}
+
+test("SMA empty historical month still fails instead of fabricating zero", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent(chart.replace('setTimeout(showEnergy,200)', "document.getElementById('table').remove();document.getElementById('details').textContent='No data available'"));
+    await assert.rejects(readSmaDailyHistory(page,{id:7,timezone:'UTC'}, {
+      start:new Date('2026-09-09T00:00:00Z'),end:new Date('2026-09-10T23:59:00Z'),
+    },300),{name:'TimeoutError'});
+  } finally {await page.close();}
+});
+
+test("SMA validation failures are not retried", async () => {
+  const { readSmaHistoryWithRecovery } = await import('../../server/scrapers/sma-browser');
+  const context = await browser.newContext();
+  let loads=0;
+  await context.route('**/*', route => {
+    loads++;
+    return route.fulfill({contentType:'text/html',body:chart.replace('3,193.66','invalid')});
+  });
+  try {
+    const page=await context.newPage();
+    await page.goto('https://ennexos.sunnyportal.com/123/monitoring/view-energy-and-power');
+    await assert.rejects(readSmaHistoryWithRecovery(page,{id:7,timezone:'UTC'}, {
+      start:new Date('2026-09-09T00:00:00Z'),end:new Date('2026-09-10T23:59:00Z'),
+    },'123',800),/daily yield is missing or invalid/);
+    assert.equal(loads,1);
+  } finally {await context.close();}
+});
