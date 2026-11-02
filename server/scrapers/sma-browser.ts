@@ -51,8 +51,7 @@ export async function scrapeSmaBrowser(site: Site, username: string, password: s
       throw new Error("SMA redirected to a different system; check the system ID and account access.");
     }
     try {
-      await waitForSmaChart(page, id);
-      return await readSmaDailyHistory(page, site, window);
+      return await readSmaHistoryWithRecovery(page, site, window, id);
     } catch {
       const diagnostics = await collectSmaDiagnostics(page).catch(() => ({ unavailable: true }));
       throw new Error(`SMA chart read failed. Diagnostics: ${JSON.stringify({ ...diagnostics, network: network.snapshot() })}`);
@@ -82,6 +81,39 @@ export async function waitForSmaChart(page: Page, systemId: string, timeoutMs = 
   }
 }
 
+// Restart the read from scratch after one transient chart timeout. No rows are
+// persisted until the entire requested window has been read successfully.
+export async function readSmaHistoryWithRecovery(
+  page: Page, site: Pick<Site, "id" | "timezone">, window: HistoryWindow,
+  systemId: string, timeoutMs = 30_000,
+): Promise<SmaReading[]> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await waitForSmaChart(page, systemId, timeoutMs);
+      return await readSmaDailyHistory(page, site, window, timeoutMs);
+    } catch (error) {
+      // Validation errors and access/session changes must not be retried.
+      const url = new URL(page.url());
+      if (attempt || !(error instanceof Error) || error.name !== "TimeoutError"
+        || url.origin !== new URL(SMA_PORTAL_URL).origin
+        || url.pathname !== `/${systemId}/monitoring/view-energy-and-power`) throw error;
+      console.log("[SMA] Chart read timed out; reloading once before restarting history read.");
+      await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+    }
+  }
+}
+
+async function waitForSmaEnergyView(page: Page, timeoutMs: number): Promise<void> {
+  await page.waitForFunction(() => {
+    if (Array.from(document.querySelectorAll('[aria-busy="true"], [role="progressbar"]')).some(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden")) return false;
+    const region = Array.from(document.querySelectorAll('[role="region"]'))
+      .find(element => element.getAttribute("aria-label") === "Details"
+        || (element.getAttribute("aria-labelledby") ?? "").split(/\s+/).map(id => document.getElementById(id)?.textContent ?? "").join(" ").trim() === "Details");
+    return !!region && (/Total yield\s*\[kWh\]/.test(region.textContent ?? "")
+      || /no data available/i.test(document.body.innerText));
+  }, undefined, { timeout: timeoutMs });
+}
+
 async function choices(page: Page, control: Locator): Promise<string[]> {
   if (!(await control.isEnabled())) return [(await control.innerText()).trim()];
   await control.click();
@@ -99,7 +131,7 @@ async function selectChoice(page: Page, control: Locator, label: string): Promis
   await control.filter({ hasText: new RegExp(`^${label}$`) }).waitFor({ state: "visible" });
 }
 
-export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "timezone">, window: HistoryWindow): Promise<SmaReading[]> {
+export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "timezone">, window: HistoryWindow, timeoutMs = 30_000): Promise<SmaReading[]> {
   // Desktop uses tabs; compact layouts use a resolution dropdown.
   const monthTab = page.getByRole("tab", { name: "Month", exact: true });
   const resolution = page.getByRole("combobox").filter({ hasText: /^(Day|Week|Month|Year|Total)$/ });
@@ -122,8 +154,9 @@ export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "t
   await yearControl.waitFor();
   // Date controls can appear before the initial power-to-energy transition
   // finishes. Do not start another chart request during that transition.
-  await page.getByRole("region", { name: "Details", exact: true })
-    .getByRole("columnheader", { name: /Total yield\s*\[kWh\]/ }).waitFor();
+  // An empty current month (e.g. just after midnight on the 1st) has no
+  // energy table. It must not block navigating to historical months.
+  await waitForSmaEnergyView(page, timeoutMs);
   const startDate = calendarDate(window.start, site.timezone);
   const endDate = calendarDate(window.end, site.timezone);
   const result: SmaReading[] = [];
@@ -139,9 +172,11 @@ export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "t
       await selectChoice(page, monthControl, month);
       // SMA retains the previous table during async chart updates, even after
       // the date selector changes. Require energy units and matching row dates.
-      await page.waitForFunction(({ month, year }) => {
+      const currentMonth = calendarDate(new Date(), site.timezone).slice(0, 7);
+      const state = await page.waitForFunction(({ month, year, allowEmpty }) => {
+        if (Array.from(document.querySelectorAll('[aria-busy="true"], [role="progressbar"]')).some(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden")) return false;
         const table = document.querySelector('[role="region"] table, [role="region"] [role="table"]');
-        if (!table) return false;
+        if (!table) return allowEmpty && /no data available/i.test(document.body.innerText) ? "empty" : false;
         const rows = Array.from(table.querySelectorAll('tr, [role="row"]'));
         if (!rows[0]?.textContent?.match(/Total yield\s*\[kWh\]/)) return false;
         const data = rows.slice(1);
@@ -150,7 +185,10 @@ export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "t
           const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
           return match && +match[1] === month && +match[3] === year;
         });
-      }, { month: MONTHS.indexOf(month) + 1, year: +year }, { timeout: 30_000 });
+      }, { month: MONTHS.indexOf(month) + 1, year: +year, allowEmpty: monthKey === currentMonth }, { timeout: timeoutMs });
+      const empty = await state.jsonValue() === "empty";
+      await state.dispose();
+      if (empty) continue;
       const table = page.getByRole("region", { name: "Details", exact: true }).getByRole("table");
       // Read header and cells in one DOM snapshot. A live refresh between
       // individual row reads must not mix two chart versions together.
