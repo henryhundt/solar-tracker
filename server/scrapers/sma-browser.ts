@@ -105,10 +105,11 @@ export async function readSmaHistoryWithRecovery(
 
 async function waitForSmaEnergyView(page: Page, timeoutMs: number): Promise<void> {
   await page.waitForFunction(() => {
-    if (Array.from(document.querySelectorAll('[aria-busy="true"], [role="progressbar"]')).some(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden")) return false;
     const region = Array.from(document.querySelectorAll('[role="region"]'))
       .find(element => element.getAttribute("aria-label") === "Details"
         || (element.getAttribute("aria-labelledby") ?? "").split(/\s+/).map(id => document.getElementById(id)?.textContent ?? "").join(" ").trim() === "Details");
+    // Empty initial views may retain a stale spinner. This gate only permits
+    // date navigation; individual months still require validated measurements.
     return !!region && (/Total yield\s*\[kWh\]/.test(region.textContent ?? "")
       || /no data available/i.test(document.body.innerText));
   }, undefined, { timeout: timeoutMs });
@@ -174,9 +175,13 @@ export async function readSmaDailyHistory(page: Page, site: Pick<Site, "id" | "t
       // the date selector changes. Require energy units and matching row dates.
       const currentMonth = calendarDate(new Date(), site.timezone).slice(0, 7);
       const state = await page.waitForFunction(({ month, year, allowEmpty }) => {
-        if (Array.from(document.querySelectorAll('[aria-busy="true"], [role="progressbar"]')).some(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden")) return false;
-        const table = document.querySelector('[role="region"] table, [role="region"] [role="table"]');
-        if (!table) return allowEmpty && /no data available/i.test(document.body.innerText) ? "empty" : false;
+        const region = Array.from(document.querySelectorAll('[role="region"]')).find(element =>
+          element.getAttribute("aria-label") === "Details"
+          || (element.getAttribute("aria-labelledby") ?? "").split(/\s+/).map(id => document.getElementById(id)?.textContent ?? "").join(" ").trim() === "Details");
+        if (!region) return false;
+        if (region.getAttribute("aria-busy") === "true" || Array.from(region.querySelectorAll('[aria-busy="true"], [role="progressbar"]')).some(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden")) return false;
+        const table = region.querySelector('table, [role="table"]');
+        if (!table) return allowEmpty && /no data available/i.test(region.textContent ?? "") ? "empty" : false;
         const rows = Array.from(table.querySelectorAll('tr, [role="row"]'));
         if (!rows[0]?.textContent?.match(/Total yield\s*\[kWh\]/)) return false;
         const data = rows.slice(1);

@@ -205,7 +205,7 @@ test("SMA empty current month does not block historical readings", async () => {
   const date = `${String(previous.getUTCMonth()+1).padStart(2,'0')}/01/${previousYear}`;
   try {
     await page.setContent(`
-      <button role="tab">Month</button>
+      <div role="progressbar" aria-label="Unrelated stale spinner"></div><button role="tab">Month</button>
       <div role="combobox" id="month" tabindex="0" onclick="months.hidden=false" onkeydown="if(event.key==='Escape')months.hidden=true">${currentMonth}</div>
       <div role="combobox" id="year" tabindex="0" onclick="years.hidden=false" onkeydown="if(event.key==='Escape')years.hidden=true">${currentYear}</div>
       <div id="months" hidden>${[...new Set([previousMonth,currentMonth])].map(m=>`<div role="option" onclick="selectMonth('${m}')">${m}</div>`).join('')}</div>
