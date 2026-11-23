@@ -1,4 +1,4 @@
-import { doublePrecision, primaryKey, index, pgTable, text, serial, integer, timestamp, real, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, doublePrecision, primaryKey, index, pgTable, text, serial, integer, timestamp, real, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -74,6 +74,15 @@ export const inverterReadings = pgTable("inverter_readings", {
   timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
   powerW: doublePrecision("power_w").notNull(),
 }, table => [primaryKey({ columns: [table.siteId, table.deviceId, table.timestamp] })]);
+
+export const inverterFaultStatus = pgTable("inverter_fault_status", {
+  siteId: integer("site_id").notNull().references(() => sites.id, { onDelete: "cascade" }),
+  deviceId: text("device_id").notNull(),
+  name: text("name").notNull(),
+  checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+  complete: boolean("complete").notNull(),
+  faults: jsonb("faults").notNull(),
+}, table => [primaryKey({ columns: [table.siteId, table.deviceId] })]);
 
 export const syncLeases = pgTable("sync_leases", {
   name: text("name").primaryKey(),

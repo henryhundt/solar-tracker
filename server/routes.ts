@@ -1,5 +1,5 @@
-import { inverterHistory, latestInverterReadings, saveInverterReadings } from "./inverters";
-import { inverterReadingSchema } from "@shared/inverters";
+import { inverterHistory, latestInverterReadings, saveInverterFaults, saveInverterReadings } from "./inverters";
+import { inverterFaultSnapshotSchema, inverterReadingSchema } from "@shared/inverters";
 import { validateSmaSite } from "@shared/sma";
 import type { Express, Request } from "express";
 import type { Server } from "http";
@@ -246,6 +246,16 @@ export async function registerRoutes(
       return res.json(await inverterHistory(site.id, req.query.deviceId));
     }
     return res.json(await latestInverterReadings(site.id));
+  });
+
+  app.post("/api/sites/:id/inverters/faults", async (req, res) => {
+    const parsed = z.array(inverterFaultSnapshotSchema).min(1).max(1000).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid inverter fault snapshots" });
+    const site = await storage.getSite(Number(req.params.id));
+    if (!site) return res.status(404).json({ message: "Site not found" });
+    if (site.archivedAt) return res.status(409).json({ message: "Site is archived" });
+    await saveInverterFaults(site.id, parsed.data.map(row => ({ ...row, deviceId: `external/${row.deviceId}` })));
+    return res.sendStatus(204);
   });
 
   app.post("/api/sites/:id/inverters", async (req, res) => {

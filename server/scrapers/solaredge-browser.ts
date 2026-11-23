@@ -1,5 +1,5 @@
 import { readSolarEdgeBrowserInverters } from "./solaredge-inverters";
-import type { InverterReading } from "@shared/inverters";
+import type { InverterFaultSnapshot, InverterReading } from "@shared/inverters";
 import type { Site } from "@shared/schema";
 import type { HistoryWindow } from "../history";
 import type { Browser, Page } from "playwright";
@@ -52,6 +52,7 @@ export async function scrapeSolarEdgeBrowser(
   password: string,
   historyWindow?: HistoryWindow,
   saveInverters?: (rows: InverterReading[]) => Promise<void>,
+  saveFaults?: (rows: InverterFaultSnapshot[]) => Promise<void>,
 ): Promise<SolarEdgeReading[]> {
   console.log(`[SolarEdge Browser] Starting browser scrape for ${site.name}`);
   
@@ -80,7 +81,7 @@ export async function scrapeSolarEdgeBrowser(
     );
 
     if (saveInverters) {
-      await readSolarEdgeBrowserInverters(request, browserSite.siteId, site.timezone, saveInverters)
+      await readSolarEdgeBrowserInverters(request, browserSite.siteId, site.timezone, saveInverters, new Date(), saveFaults)
         .catch(() => console.warn(`[SolarEdge] Device power unavailable for site ${site.id}`));
     }
 
