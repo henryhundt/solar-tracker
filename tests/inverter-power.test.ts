@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Site } from "../shared/schema";
 import type { InverterReading } from "../shared/inverters";
-import { readSolarEdgeInverters } from "../server/scrapers/inverter-power";
+import { eGaugeDeviceReadings, readSolarEdgeInverters } from "../server/scrapers/inverter-power";
 
 test("SolarEdge keeps devices separate, preserves zero and skips missing power", async t => {
   t.mock.method(globalThis, "fetch", async (input: string) => {
@@ -22,4 +22,11 @@ test("SolarEdge keeps devices separate, preserves zero and skips missing power",
     ["solaredge/A", 0, "2026-11-20T20:00:00.000Z"],
     ["solaredge/B", 1400, "2026-11-20T20:00:00.000Z"],
   ]);
+});
+
+test("eGauge total selection resolves only whole-device channels in the selected array", () => {
+  const names = ["Total HS INV 1-7 PV Output", "HSR INV 3 - SN123", "CT1 L1 HSR INV3 SN123",
+    "HSG INV 1 & INV 2 Total", "ESG INV 3 - SN456"];
+  const registers = names.map((name, idx) => ({ idx, name, type: "P", rate: 0, measuredAtSeconds: 100, isRecommendedSolar: false }));
+  assert.deepEqual(eGaugeDeviceReadings(registers, [registers[0]]).map(row => row.name), [names[1]]);
 });

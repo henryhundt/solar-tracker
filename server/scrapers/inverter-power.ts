@@ -1,6 +1,6 @@
 import type { InverterReading } from "@shared/inverters";
 import type { Site } from "@shared/schema";
-import { getSelectedEGaugeRegisters } from "@shared/egauge";
+import { getSelectedEGaugeRegisters, type EGaugeRegisterInspection, type EGaugeRegisterSelection } from "@shared/egauge";
 import { inspectEGaugeRegisters, resolveEGaugeAccess } from "./egauge-client";
 import { fetchWithTimeout } from "../provider-http";
 import { formatLocalTimeInTimeZone, parseLocalTimeInTimeZone } from "../provider-time";
@@ -8,8 +8,19 @@ import { formatLocalTimeInTimeZone, parseLocalTimeInTimeZone } from "../provider
 export async function readEGaugeInverters(site: Site, access: ReturnType<typeof resolveEGaugeAccess>) {
   const selected = getSelectedEGaugeRegisters(site);
   const registers = await inspectEGaugeRegisters(access);
+  return eGaugeDeviceReadings(registers, selected);
+}
+
+export function eGaugeDeviceReadings(registers: EGaugeRegisterInspection[], selected: EGaugeRegisterSelection[]) {
+  const ranges = selected.flatMap(register => {
+    const match = register.name.match(/^Total ([A-Z]+) INV (\d+)-(\d+) PV Output$/i);
+    return match ? [{ group: match[1].toUpperCase(), first: Number(match[2]), last: Number(match[3]) }] : [];
+  });
   return registers.flatMap(register => {
-    if (selected.length && !selected.some(item => item.idx === register.idx)) return [];
+    if (/\b(?:total|all|combined|CT\d+|L[123])\b|[&+]|\d\s*[-–]\s*\d/i.test(register.name)) return [];
+    const device = register.name.match(/^([A-Z]+) INV (\d+) - SN\d+$/i);
+    const inRange = device && ranges.some(range => device[1].toUpperCase().startsWith(range.group) && Number(device[2]) >= range.first && Number(device[2]) <= range.last);
+    if (selected.length && !inRange && !selected.some(item => item.idx === register.idx)) return [];
     if (register.type !== "P" || !/\b(?:inverter|inv)[\s#_-]*\d+\b/i.test(register.name) || typeof register.rate !== "number") return [];
     if (register.measuredAtSeconds == null) return [];
     const timestamp = new Date(register.measuredAtSeconds * 1000).toISOString();
