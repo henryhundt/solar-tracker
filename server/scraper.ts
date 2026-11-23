@@ -1,3 +1,7 @@
+import type { InverterReading } from "@shared/inverters";
+import { saveInverterReadings } from "./inverters";
+import { readEGaugeInverters, readSolarEdgeInverters } from "./scrapers/inverter-power";
+import { resolveEGaugeAccess } from "./scrapers/egauge-client";
 import { scrapeSmaBrowser } from "./scrapers/sma-browser";
 import type { Site } from "@shared/schema";
 import { getAlsoEnergyApiSiteId, getAlsoEnergyBrowserSiteKey } from "@shared/alsoenergy";
@@ -67,6 +71,7 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
       powerW: number | null;
     }> = [];
 
+    const saveInverters = (rows: InverterReading[]) => saveInverterReadings(currentSite.id, rows);
     switch (currentSite.scraperType) {
       case "egauge":
         if (!url) {
@@ -89,12 +94,12 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
         if (!username || !password) {
           throw new Error("SolarEdge Browser automation requires username and password");
         }
-        readings = await scrapeSolarEdgeBrowser(currentSite, username, password, historyWindow);
+        readings = await scrapeSolarEdgeBrowser(currentSite, username, password, historyWindow, saveInverters);
         break;
 
       case "sma_browser":
         if (!username || !password) throw new Error("SMA requires SMA ID username and password.");
-        readings = await scrapeSmaBrowser(currentSite, username, password, historyWindow);
+        readings = await scrapeSmaBrowser(currentSite, username, password, historyWindow, saveInverters);
         break;
 
       case "alsoenergy":
@@ -103,9 +108,9 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
         }
         try {
           if (getAlsoEnergyApiSiteId(currentSite)) {
-            readings = await scrapeAlsoEnergy(currentSite, url ?? "", username, password, apiKey, historyWindow);
+            readings = await scrapeAlsoEnergy(currentSite, url ?? "", username, password, apiKey, historyWindow, saveInverters);
           } else {
-            readings = await scrapeAlsoEnergyBrowser(currentSite, username, password, historyWindow);
+            readings = await scrapeAlsoEnergyBrowser(currentSite, username, password, historyWindow, saveInverters);
           }
         } catch (error: any) {
           if (!getAlsoEnergyBrowserSiteKey(currentSite)) {
@@ -113,7 +118,7 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
           }
 
           console.log(`[AlsoEnergy] API path unavailable for ${currentSite.name}, falling back to browser scraper: ${error.message}`);
-          readings = await scrapeAlsoEnergyBrowser(currentSite, username, password, historyWindow);
+          readings = await scrapeAlsoEnergyBrowser(currentSite, username, password, historyWindow, saveInverters);
         }
         break;
 
@@ -141,6 +146,26 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
         const savedReadings = await storage.upsertReadings(readings);
         console.log(`Stored ${savedReadings.length} reading(s) for ${currentSite.name} (inserted new rows or refreshed existing timestamps)`);
       }
+    }
+
+    try {
+      if (currentSite.scraperType === "solaredge_api" && apiKey) {
+        await readSolarEdgeInverters(currentSite, apiKey, rows => saveInverterReadings(currentSite.id, rows));
+      } else if (currentSite.scraperType === "egauge") {
+        const rows = await readEGaugeInverters(currentSite, resolveEGaugeAccess({ url, username, password }));
+        await saveInverterReadings(currentSite.id, rows);
+      } else if (currentSite.scraperType === "mock") {
+        const latest = readings.at(-1);
+        if (latest && latest.powerW !== null) {
+          const watts = latest.powerW;
+          await saveInverterReadings(currentSite.id, [0.55, 0.45].map((share, index) => ({
+            deviceId: `mock/${index + 1}`, name: `Demo inverter ${index + 1}`,
+            timestamp: latest.timestamp.toISOString(), powerW: Math.round(watts * share),
+          })));
+        }
+      }
+    } catch {
+      console.warn(`Inverter telemetry unavailable for site ${currentSite.id}`);
     }
 
     const cutoff = getHourlyHistoryCutoff();

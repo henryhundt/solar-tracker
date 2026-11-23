@@ -1,4 +1,4 @@
-import { index, pgTable, text, serial, integer, timestamp, real, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { doublePrecision, primaryKey, index, pgTable, text, serial, integer, timestamp, real, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -66,6 +66,14 @@ export const readings = pgTable("readings", {
   siteTimestampUnique: uniqueIndex("readings_site_timestamp_unique").on(table.siteId, table.timestamp),
   timestampIndex: index("readings_timestamp_idx").on(table.timestamp),
 }));
+
+export const inverterReadings = pgTable("inverter_readings", {
+  siteId: integer("site_id").notNull().references(() => sites.id, { onDelete: "cascade" }),
+  deviceId: text("device_id").notNull(),
+  name: text("name").notNull(),
+  timestamp: timestamp("timestamp", { withTimezone: true }).notNull(),
+  powerW: doublePrecision("power_w").notNull(),
+}, table => [primaryKey({ columns: [table.siteId, table.deviceId, table.timestamp] })]);
 
 export const syncLeases = pgTable("sync_leases", {
   name: text("name").primaryKey(),

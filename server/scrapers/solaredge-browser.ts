@@ -1,3 +1,5 @@
+import { readSolarEdgeBrowserInverters } from "./solaredge-inverters";
+import type { InverterReading } from "@shared/inverters";
 import type { Site } from "@shared/schema";
 import type { HistoryWindow } from "../history";
 import type { Browser, Page } from "playwright";
@@ -48,7 +50,8 @@ export async function scrapeSolarEdgeBrowser(
   site: Site,
   username: string,
   password: string,
-  historyWindow?: HistoryWindow
+  historyWindow?: HistoryWindow,
+  saveInverters?: (rows: InverterReading[]) => Promise<void>,
 ): Promise<SolarEdgeReading[]> {
   console.log(`[SolarEdge Browser] Starting browser scrape for ${site.name}`);
   
@@ -71,9 +74,15 @@ export async function scrapeSolarEdgeBrowser(
 
     // Only timestamped provider measurements are valid readings. Never infer
     // daily production from unrelated numbers in rendered dashboard text.
+    const request = await solarEdgeSessionRequest(page);
     const readings = await extractEnergyDataFromDashboardApis(
-      await solarEdgeSessionRequest(page), site, browserSite.siteId, historyWindow,
+      request, site, browserSite.siteId, historyWindow,
     );
+
+    if (saveInverters) {
+      await readSolarEdgeBrowserInverters(request, browserSite.siteId, site.timezone, saveInverters)
+        .catch(() => console.warn(`[SolarEdge] Device power unavailable for site ${site.id}`));
+    }
 
     const filteredReadings = filterReadingsToWindow(readings, historyWindow);
     

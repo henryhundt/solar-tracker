@@ -10,6 +10,7 @@ export const eGaugeRegisterSelectionSchema = z.object({
 });
 
 export const eGaugeRegisterInspectionSchema = eGaugeRegisterSelectionSchema.extend({
+  measuredAtSeconds: z.number().optional(),
   rate: z.number().optional(),
   isRecommendedSolar: z.boolean().default(false),
 });
