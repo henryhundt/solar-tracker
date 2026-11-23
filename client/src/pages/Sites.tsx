@@ -1,3 +1,4 @@
+import { InverterPanel } from "@/components/InverterPanel";
 import { lazy, Suspense, useEffect, useRef } from "react";
 import { format, formatDistanceToNow } from "date-fns";
 import {
@@ -231,6 +232,8 @@ function SiteDetails({ site, archived }: { site: PublicSite; archived?: boolean 
           {site.lastError}
         </div>
       )}
+
+      <InverterPanel site={site} />
 
       {site.notes && (
         <div className="rounded-2xl border border-border/60 bg-background/70 p-4">

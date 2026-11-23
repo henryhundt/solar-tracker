@@ -1,3 +1,5 @@
+import { inverterHistory, latestInverterReadings, saveInverterReadings } from "./inverters";
+import { inverterReadingSchema } from "@shared/inverters";
 import { validateSmaSite } from "@shared/sma";
 import type { Express, Request } from "express";
 import type { Server } from "http";
@@ -236,6 +238,28 @@ export async function registerRoutes(
   });
 
   // Readings Route
+  app.get("/api/sites/:id/inverters", async (req, res) => {
+    const site = await storage.getSite(Number(req.params.id));
+    if (!site) return res.status(404).json({ message: "Site not found" });
+    if (req.query.deviceId !== undefined) {
+      if (typeof req.query.deviceId !== "string") return res.sendStatus(400);
+      return res.json(await inverterHistory(site.id, req.query.deviceId));
+    }
+    return res.json(await latestInverterReadings(site.id));
+  });
+
+  app.post("/api/sites/:id/inverters", async (req, res) => {
+    const parsed = z.array(inverterReadingSchema).min(1).max(1000).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid inverter readings" });
+    const site = await storage.getSite(Number(req.params.id));
+    if (!site) return res.status(404).json({ message: "Site not found" });
+    if (site.archivedAt) return res.status(409).json({ message: "Site is archived" });
+    await saveInverterReadings(site.id, parsed.data.map(row => ({
+      ...row, deviceId: `external/${row.deviceId}`,
+    })));
+    return res.sendStatus(204);
+  });
+
   app.get(api.readings.summary.path, async (req, res) => {
     try {
       const from = parseOptionalDateParam(req.query.from, "from");

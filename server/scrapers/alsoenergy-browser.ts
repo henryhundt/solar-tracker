@@ -1,3 +1,5 @@
+import type { InverterReading } from "@shared/inverters";
+import { formatLocalTimeInTimeZone, parseLocalTimeInTimeZone } from "../provider-time";
 import type { Site } from "@shared/schema";
 import { getAlsoEnergyBrowserSiteKey } from "@shared/alsoenergy";
 import type { HistoryWindow } from "../history";
@@ -40,7 +42,7 @@ interface PowerTrackHardwareSummaryResponse {
   hardware?: Array<{
     key?: string | null;
     name?: string | null;
-    functionCode?: number | null;
+    functionCode?: number | string | null;
     archiveColumns?: string[] | null;
   }>;
 }
@@ -66,7 +68,8 @@ export async function scrapeAlsoEnergyBrowser(
   site: Site,
   username: string,
   password: string,
-  historyWindow?: HistoryWindow
+  historyWindow?: HistoryWindow,
+  saveInverters?: (rows: InverterReading[]) => Promise<void>,
 ): Promise<AlsoEnergyReading[]> {
   console.log(`[AlsoEnergy Browser] Starting browser scrape for ${site.name}`);
 
@@ -86,6 +89,12 @@ export async function scrapeAlsoEnergyBrowser(
     await loginToPowerTrack(page, username, password);
     await navigateToSite(page, site.siteIdentifier);
     const readings = await extractEnergyData(page, site, historyWindow);
+
+    const siteKey = getAlsoEnergyBrowserSiteKey(site);
+    if (saveInverters && siteKey) {
+      await readPowerTrackInverters(page, siteKey, site.timezone, saveInverters)
+        .catch(() => console.warn(`[AlsoEnergy] Device telemetry unavailable for site ${site.id}`));
+    }
 
     console.log(`[AlsoEnergy Browser] Retrieved ${readings.length} readings for ${site.name}`);
     return readings;
@@ -337,6 +346,58 @@ async function fetchChartHistory(
   return Array.from(readingsByTimestamp.values()).sort(
     (left, right) => left.timestamp.getTime() - right.timestamp.getTime()
   );
+}
+
+export function powerTrackInverterReadings(chart: PowerTrackChartResponse, deviceKey: string, name: string,
+  start: Date, end: Date, now: Date): InverterReading[] {
+  const series = (chart.series ?? []).filter(s => !isEstimateSeries(s) &&
+    (s.units === 10 || /^(kw|kilowatts?)$/i.test(s.customUnit ?? "")));
+  if (series.length !== 1) return [];
+  const device = { deviceId: `alsoenergy/${deviceKey.slice(1)}`, name };
+  const readings: InverterReading[] = [];
+  const add = (time: number, value: unknown) => {
+    if (Number.isFinite(time) && time >= +start && time < +end && time <= +now && typeof value === "number" && Number.isFinite(value)) {
+      readings.push({ ...device, timestamp: new Date(time).toISOString(), powerW: value * 1000 });
+    }
+  };
+  if (series[0].dataXy?.length) {
+    for (const point of series[0].dataXy) add(point.x, point.y);
+  } else {
+    const bins = series[0].dataBinned ?? [];
+    // A regular day has 96 quarter-hour slots. Require explicit timestamps on DST transition days.
+    if (+end - +start !== 86400000 || bins.length !== QUARTERS_PER_DAY) return [];
+    bins.forEach((value, i) => add(+start + i * QUARTER_HOUR_MS, value));
+  }
+  return readings;
+}
+
+async function readPowerTrackInverters(page: Page, siteKey: string, timezone: string,
+  save: (rows: InverterReading[]) => Promise<void>) {
+  if (new URL(page.url()).origin !== POWERTRACK_URL) throw new Error("PowerTrack session unavailable");
+  const hardware = await fetchPowerTrackJson<PowerTrackHardwareSummaryResponse>(page, "/api/view/sitehardware", {
+    method: "POST", body: { key: siteKey, includeRegistersFromHardware: [] },
+  });
+  const now = new Date();
+  const today = formatLocalTimeInTimeZone(now, timezone).slice(0, 10);
+  const calendarDay = (offset: number) => new Date(Date.parse(today) + offset * 86400000).toISOString().slice(0, 10);
+  for (const device of hardware.hardware ?? []) {
+    if (!device.key || !/^H\d+$/i.test(device.key) || device.functionCode === 2) continue;
+    if (device.functionCode !== "PV" && !/^(?:PV\s+)?(?:inverter|inv)[\s#_-]*\d+\b/i.test(device.name ?? "")) continue;
+    for (const offset of [-1, 0]) {
+      const day = calendarDay(offset);
+      const start = parseLocalTimeInTimeZone(day + "T00:00:00", timezone)!;
+      const end = parseLocalTimeInTimeZone(calendarDay(offset + 1) + "T00:00:00", timezone)!;
+      try {
+        const chart = await fetchPowerTrackJson<PowerTrackChartResponse>(page, "/api/view/chart", {
+          method: "POST", body: { chartType: 15, binSize: 15, context: "hardware", start: day, end: day,
+            futureDays: 0, hardwareSet: [device.key], sectionCode: 2, query: null, source: [device.key] },
+        });
+        await save(powerTrackInverterReadings(chart, device.key, device.name || device.key, start, end, now));
+      } catch {
+        console.warn(`[AlsoEnergy] Power chart unavailable for ${device.key} on ${day}`);
+      }
+    }
+  }
 }
 
 async function fetchProductionMeterKeys(page: Page, siteKey: string): Promise<string[]> {

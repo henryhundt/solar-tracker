@@ -13,6 +13,7 @@ interface EGaugeLoginResponse {
 }
 
 interface EGaugeRegisterDescriptor {
+  rate?: number | string;
   idx?: number | string;
   name?: string;
   type?: string;
@@ -20,6 +21,7 @@ interface EGaugeRegisterDescriptor {
 }
 
 interface EGaugeRegisterSnapshotResponse {
+  ts?: number | string;
   registers?: EGaugeRegisterDescriptor[];
   ranges?: Array<{
     ts?: number | string;
@@ -254,19 +256,6 @@ async function fetchEGaugeRegisterSnapshot(
   });
 }
 
-function readRegisterRate(
-  response: EGaugeRegisterSnapshotResponse,
-  registerIndex: number
-): number | null {
-  const range = response.ranges?.[0];
-  const row = range?.rows?.[0];
-  if (!row) {
-    return null;
-  }
-
-  return toFiniteNumber(row[registerIndex]);
-}
-
 function parseWebApiRegisters(snapshot: EGaugeRegisterSnapshotResponse): EGaugeRegisterInspection[] {
   const parsedRegisters: EGaugeRegisterInspection[] = [];
   const snapshotRegisters = snapshot.registers ?? [];
@@ -277,13 +266,14 @@ function parseWebApiRegisters(snapshot: EGaugeRegisterSnapshotResponse): EGaugeR
       continue;
     }
 
-    const currentRate = readRegisterRate(snapshot, index);
+    const currentRate = toFiniteNumber(register.rate);
     parsedRegisters.push({
       idx,
       did: toFiniteNumber(register.did) ?? undefined,
       name: register.name,
       type: register.type,
       rate: currentRate ?? undefined,
+      measuredAtSeconds: toFiniteNumber(snapshot.ts) ?? undefined,
       isRecommendedSolar:
         register.type === "P" && SOLAR_NAME_PATTERN.test(register.name),
     });
@@ -297,6 +287,7 @@ function parseXmlRegisters(snapshot: EGaugeXmlSnapshotResponse): EGaugeRegisterI
     idx: register.idx,
     name: register.name,
     type: register.type,
+    measuredAtSeconds: snapshot.timeStamp,
     rate: register.type === "P" ? readXmlRegisterRate(snapshot, register.idx) ?? undefined : undefined,
     isRecommendedSolar:
       register.type === "P" && SOLAR_NAME_PATTERN.test(register.name),

@@ -1,3 +1,5 @@
+import { readSmaInverters } from "./sma-inverters";
+import type { InverterReading } from "@shared/inverters";
 import { trackSmaNetwork } from "./sma-network";
 import type { Page, Locator } from "playwright";
 import type { Site } from "@shared/schema";
@@ -36,7 +38,7 @@ export async function loginSma(page: Page, username: string, password: string, t
   }
 }
 
-export async function scrapeSmaBrowser(site: Site, username: string, password: string, window: HistoryWindow): Promise<SmaReading[]> {
+export async function scrapeSmaBrowser(site: Site, username: string, password: string, window: HistoryWindow, saveInverters?: (rows: InverterReading[]) => Promise<void>): Promise<SmaReading[]> {
   const id = smaSiteIdSchema.parse(site.siteIdentifier);
   const browser = await launchScraperChromium();
   try {
@@ -51,7 +53,11 @@ export async function scrapeSmaBrowser(site: Site, username: string, password: s
       throw new Error("SMA redirected to a different system; check the system ID and account access.");
     }
     try {
-      return await readSmaHistoryWithRecovery(page, site, window, id);
+      const readings = await readSmaHistoryWithRecovery(page, site, window, id);
+      if (saveInverters) {
+        await readSmaInverters(page, id, saveInverters).catch(() => console.warn(`[SMA] Device inventory unavailable for site ${site.id}`));
+      }
+      return readings;
     } catch {
       const diagnostics = await collectSmaDiagnostics(page).catch(() => ({ unavailable: true }));
       throw new Error(`SMA chart read failed. Diagnostics: ${JSON.stringify({ ...diagnostics, network: network.snapshot() })}`);

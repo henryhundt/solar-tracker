@@ -1,3 +1,5 @@
+import { parseLocalTimeInTimeZone, formatLocalTimeInTimeZone, formatDateTimeParts, getDateTimeParts } from "../provider-time";
+import type { InverterReading } from "@shared/inverters";
 import { getAlsoEnergyApiSiteId } from "@shared/alsoenergy";
 import type { Site } from "@shared/schema";
 import type { HistoryWindow } from "../history";
@@ -163,7 +165,8 @@ export async function scrapeAlsoEnergy(
   username: string,
   password: string,
   _apiKey?: string | null,
-  historyWindow?: HistoryWindow
+  historyWindow?: HistoryWindow,
+  onInverters?: (rows: InverterReading[]) => Promise<void>,
 ): Promise<AlsoEnergyReading[]> {
   console.log(`[AlsoEnergy] Starting API scrape for ${site.name}`);
 
@@ -190,6 +193,41 @@ export async function scrapeAlsoEnergy(
   if (normalizedWindow === null) {
     console.log("[AlsoEnergy] Requested window does not include a completed hourly bin yet.");
     return [];
+  }
+
+  if (onInverters) {
+    const hardware = (hardwareSnapshot.hardware ?? []).filter(item => item.functionCode === "PV");
+    const fields = hardware.flatMap(item => {
+      const fieldName = item.fieldsArchived?.find(field => POWER_HARDWARE_FIELD_CANDIDATES.some(
+        candidate => candidate.toLowerCase() === field.toLowerCase()
+      ));
+      return fieldName ? [{ hardwareId: item.id, fieldName, function: "Avg" as const }] : [];
+    });
+    if (fields.length) {
+      try {
+        const end = normalizedWindow.end;
+        const result = await fetchBinData(baseUrl, accessToken, new Date(end.getTime() - 86400000), end, siteTimeZone, fields);
+        const rows: InverterReading[] = [];
+        for (const column of result.info ?? []) {
+          const device = hardware.find(item => item.id === column.hardwareId);
+          if (!device) continue;
+          const unit = (column.units || fields.find(field => field.hardwareId === device.id)?.fieldName)?.toLowerCase();
+          const scale = unit === "kw" || unit === "kilowatts" ? 1000
+            : ["w", "watts", "wrcv"].includes(unit ?? "") ? 1 : null;
+          if (scale === null) continue;
+          for (const item of result.items ?? []) {
+            const timestamp = parseAlsoEnergyTimestamp(item.timestamp, siteTimeZone);
+            const value = item.data?.[column.dataIndex];
+            if (timestamp && typeof value === "number" && Number.isFinite(value)) {
+              rows.push({ deviceId: `alsoenergy/${device.id}`, name: device.name, timestamp: timestamp.toISOString(), powerW: value * scale });
+            }
+          }
+        }
+        await onInverters(rows);
+      } catch {
+        console.warn(`[AlsoEnergy] Inverter telemetry unavailable for site ${site.id}`);
+      }
+    }
   }
 
   const plans = buildBinDataPlans(parsedSiteId, hardwareSnapshot);
@@ -694,82 +732,12 @@ function parseAlsoEnergyTimestamp(value: string | undefined, siteTimeZone: strin
   return parseLocalTimeInTimeZone(value, siteTimeZone);
 }
 
-function parseLocalTimeInTimeZone(value: string, timeZone: string): Date | null {
-  const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
-  );
-  if (!match) {
-    return null;
-  }
-
-  const [, year, month, day, hour, minute, second = "00"] = match;
-  const utcGuess = new Date(Date.UTC(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    Number(hour),
-    Number(minute),
-    Number(second)
-  ));
-
-  const offsetMs = getTimeZoneOffsetMs(utcGuess, timeZone);
-  return new Date(utcGuess.getTime() - offsetMs);
-}
-
 function floorDateToHourInTimeZone(date: Date, timeZone: string): Date {
   const parts = getDateTimeParts(date, timeZone);
   return parseLocalTimeInTimeZone(
     formatDateTimeParts(parts, { minute: "00", second: "00" }),
     timeZone
   ) ?? new Date(date);
-}
-
-function formatLocalTimeInTimeZone(date: Date, timeZone: string): string {
-  return formatDateTimeParts(getDateTimeParts(date, timeZone));
-}
-
-function getDateTimeParts(date: Date, timeZone: string): Record<string, string> {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-
-  const parts = formatter.formatToParts(date);
-  const result: Record<string, string> = {};
-  for (const part of parts) {
-    if (part.type !== "literal") {
-      result[part.type] = part.value;
-    }
-  }
-
-  return result;
-}
-
-function formatDateTimeParts(
-  parts: Record<string, string>,
-  overrides?: Partial<Record<"hour" | "minute" | "second", string>>
-): string {
-  return `${parts.year}-${parts.month}-${parts.day}T${overrides?.hour ?? parts.hour}:${overrides?.minute ?? parts.minute}:${overrides?.second ?? parts.second}`;
-}
-
-function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
-  const parts = getDateTimeParts(date, timeZone);
-  const utcEquivalent = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour),
-    Number(parts.minute),
-    Number(parts.second)
-  );
-
-  return utcEquivalent - date.getTime();
 }
 
 function formatDate(date: Date): string {
