@@ -1,5 +1,5 @@
-import type { InverterReading } from "@shared/inverters";
-import { saveInverterReadings } from "./inverters";
+import type { InverterFaultSnapshot, InverterReading } from "@shared/inverters";
+import { saveInverterFaults, saveInverterReadings } from "./inverters";
 import { readEGaugeInverters, readSolarEdgeInverters } from "./scrapers/inverter-power";
 import { resolveEGaugeAccess } from "./scrapers/egauge-client";
 import { scrapeSmaBrowser } from "./scrapers/sma-browser";
@@ -71,6 +71,7 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
       powerW: number | null;
     }> = [];
 
+    const saveFaults = (rows: InverterFaultSnapshot[]) => saveInverterFaults(currentSite.id, rows);
     const saveInverters = (rows: InverterReading[]) => saveInverterReadings(currentSite.id, rows);
     switch (currentSite.scraperType) {
       case "egauge":
@@ -94,12 +95,12 @@ export async function scrapeClaimedSite(currentSite: Site): Promise<ScraperResul
         if (!username || !password) {
           throw new Error("SolarEdge Browser automation requires username and password");
         }
-        readings = await scrapeSolarEdgeBrowser(currentSite, username, password, historyWindow, saveInverters);
+        readings = await scrapeSolarEdgeBrowser(currentSite, username, password, historyWindow, saveInverters, saveFaults);
         break;
 
       case "sma_browser":
         if (!username || !password) throw new Error("SMA requires SMA ID username and password.");
-        readings = await scrapeSmaBrowser(currentSite, username, password, historyWindow, saveInverters);
+        readings = await scrapeSmaBrowser(currentSite, username, password, historyWindow, saveInverters, saveFaults);
         break;
 
       case "alsoenergy":
