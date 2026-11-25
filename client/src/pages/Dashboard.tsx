@@ -1,3 +1,5 @@
+import { InverterReadings } from "@/components/InverterPanel";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { format, formatDistanceToNow, isToday, startOfDay, subDays } from "date-fns";
 import { Download, ExternalLink, LineChart, RefreshCw, Sun, Zap } from "lucide-react";
@@ -84,6 +86,21 @@ export default function Dashboard() {
   } = useDashboardSummary({ from: historyFrom }, { refetchWhileSyncing: isAnySiteSyncing });
   const syncAllSitesMutation = useSyncAllSites();
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
+  const [inverterSiteId, setInverterSiteId] = useState<number | null>(null);
+  const inverterSite = sites?.find(site => site.id === inverterSiteId);
+  const inverterTrigger = useRef<HTMLButtonElement | null>(null);
+
+  function inverterButton(site: { id: number; name: string }) {
+    return (
+      <Button variant="outline" size="sm" aria-label={`View inverters for ${site.name}`} aria-haspopup="dialog"
+        onClick={event => {
+          inverterTrigger.current = event.currentTarget;
+          setInverterSiteId(site.id);
+        }}>
+        View inverters
+      </Button>
+    );
+  }
   const wasSyncingRef = useRef(false);
   const syncAllClickLockedRef = useRef(false);
 
@@ -266,9 +283,12 @@ export default function Dashboard() {
               </div>
 
               <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-3xl font-bold font-display tracking-tight text-foreground md:text-4xl">
                   {selectedSite ? selectedSite.name : "Overview"}
                 </h2>
+                {selectedSite && inverterButton(selectedSite)}
+                </div>
                 <p className="max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">
                   {selectedSite
                     ? "Track this system’s recent production, watch for stale syncs, and export its latest readings."
@@ -477,15 +497,6 @@ export default function Dashboard() {
                 return (
                   <div
                     key={site.id}
-                    onClick={() => setSelectedSiteId(isSelected ? null : site.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setSelectedSiteId(isSelected ? null : site.id);
-                      }
-                    }}
-                    role="button"
-                    tabIndex={0}
                     className={cn(
                       "rounded-[1rem] border p-4 transition-all focus:outline-none focus:ring-2 focus:ring-primary/20",
                       isSelected
@@ -509,7 +520,10 @@ export default function Dashboard() {
                       <div className="min-w-0 flex-1 space-y-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="truncate font-semibold text-foreground">{site.name}</p>
+                            <button className="block max-w-full truncate text-left font-semibold text-foreground hover:underline"
+                              aria-pressed={isSelected} onClick={() => setSelectedSiteId(isSelected ? null : site.id)}>
+                              {site.name}
+                            </button>
                             <p className="text-xs text-muted-foreground">
                               {formatScraperLabel(site.scraperType)} portal
                             </p>
@@ -530,6 +544,7 @@ export default function Dashboard() {
                           )}
                         </div>
 
+                        {inverterButton(site)}
                         <div className="grid gap-2">
                           <div className="rounded-2xl border border-border/60 bg-card/90 px-3 py-2.5">
                             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
@@ -563,6 +578,18 @@ export default function Dashboard() {
           </section>
         </div>
       </div>
+      <Sheet open={!!inverterSite} onOpenChange={open => { if (!open) setInverterSiteId(null); }}>
+        <SheetContent className="flex w-full flex-col sm:max-w-xl" aria-describedby={undefined}
+          onCloseAutoFocus={event => {
+            event.preventDefault();
+            inverterTrigger.current?.focus({ preventScroll: true });
+          }}>
+          <SheetTitle className="pr-12">{inverterSite?.name} · Inverters</SheetTitle>
+          <div className="min-h-0 overflow-y-auto">
+            {inverterSite && <InverterReadings key={inverterSite.id} site={inverterSite} />}
+          </div>
+        </SheetContent>
+      </Sheet>
     </Layout>
   );
 }
